@@ -270,7 +270,8 @@ class DiffuserTrafficModel(pl.LightningModule):
         if self.use_ema:
             cur_policy = self.ema_policy
 
-        cur_policy.eval()
+        # cur_policy.eval()
+        cur_policy.model.eval()
 
         # update with current "global" timestep
         cur_policy.update_guidance(global_t=kwargs['step_index'])

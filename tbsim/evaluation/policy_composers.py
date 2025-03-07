@@ -43,7 +43,15 @@ class Diffuser(PolicyComposer):
                 policy_ckpt_path,
                 algo_config=policy_cfg.algo,
                 modality_shapes=self.get_modality_shapes(policy_cfg)
+            ).to(self.device)
+            policy.nets["policy"].model.eval()
+            """
+            policy = DiffuserTrafficModel.load_from_checkpoint(
+                policy_ckpt_path,
+                algo_config=policy_cfg.algo,
+                modality_shapes=self.get_modality_shapes(policy_cfg)
             ).to(self.device).eval()
+            """
             policy_cfg = policy_cfg.clone()
         policy = PolicyWrapper.wrap_controller(
             policy,

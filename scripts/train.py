@@ -152,8 +152,11 @@ def main(cfg, auto_remove_exp_dir=False):
         # all callbacks
         callbacks=train_callbacks,
         # device & distributed training setup
-        gpus=cfg.devices.num_gpus,
-        strategy=cfg.train.parallel_strategy,
+        accelerator='gpu',
+        devices=1,
+        strategy='auto',
+        #gpus=cfg.devices.num_gpus,
+        # strategy=cfg.train.parallel_strategy,
     )
 
     trainer.fit(model=model, datamodule=datamodule)

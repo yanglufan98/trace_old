@@ -1,6 +1,7 @@
 # tbsim
 numpy==1.21.4 # trajdata requires this version
-pytorch-lightning==1.6.4
+#pytorch-lightning==1.6.4
+pytorch-lightning==2.3
 wandb
 pyemd
 h5py
