@@ -44,7 +44,7 @@ class Diffuser(PolicyComposer):
                 algo_config=policy_cfg.algo,
                 modality_shapes=self.get_modality_shapes(policy_cfg)
             ).to(self.device)
-            policy.nets["policy"].model.eval()
+            policy.nets["policy"].eval()
             """
             policy = DiffuserTrafficModel.load_from_checkpoint(
                 policy_ckpt_path,

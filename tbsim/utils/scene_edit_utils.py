@@ -106,6 +106,9 @@ def guided_rollout(
         else:
             info[k].append(v)
 
+    key = list(env.logger.get_trajectory().keys())[0]
+    info['trajectory'] = env.logger.get_trajectory()[key]
+
     env.reset_multi_episodes_metrics()
 
     return stats, info
@@ -356,6 +359,48 @@ def heuristic_map_collision(sim_scene, dt, num_points_lw):
     }
     return guide_config
 
+def heuristic_mapf_collision(sim_scene, dt, num_disks=1, buffer_dist=0.2, priority=None):
+    '''
+    Applies collision loss to agents based on priority order.
+    Higher priority agents are treated as dynamic obstacles for lower priority agents.
+    Priority is a list of agent indices, ordered from highest to lowest priority.
+    If priority is None, all agents have equal priority.
+    '''
+    if priority is None:
+        # If no priority specified, use order of appearance as priority
+        num_agents = len(sim_scene.agents)
+        priority = list(range(num_agents))
+        guide_configs = []
+        for i, agent_idx in enumerate(priority):
+            # Each agent needs to avoid all higher priority agents
+            higher_priority = priority[:i]
+            guide_configs.append({
+                'name': 'mapf_collision',
+                'params': {
+                    'num_disks': num_disks,
+                    'priority': higher_priority # List of agents to avoid
+                },
+                'agents': [agent_idx] # Current agent
+            })
+        return guide_configs
+    
+    # Create separate guidance configs for each priority level
+    guide_configs = []
+    for i, agent_idx in enumerate(priority):
+        # Each agent needs to avoid all higher priority agents
+        higher_priority = priority[:i]
+        
+        guide_configs.append({
+            'name': 'mapf_collision', 
+            'params': {
+                'num_disks': num_disks,
+                'priority': higher_priority # List of agents to avoid
+            },
+            'agents': [agent_idx] # Current agent
+        })
+    
+    return guide_configs
+
 HEURISTIC_FUNC = {
     'global_target_pos_at_time' : heuristic_global_target_pos_at_time,
     'global_target_pos' : heuristic_global_target_pos,
@@ -364,6 +409,7 @@ HEURISTIC_FUNC = {
     'agent_collision' : heuristic_agent_collision,
     'map_collision' : heuristic_map_collision,
     'social_group' : heuristic_social_group,
+    'mapf_collision': heuristic_mapf_collision,
 }
 
 def compute_heuristic_guidance(heuristic_config, env, scene_indices, start_frames):

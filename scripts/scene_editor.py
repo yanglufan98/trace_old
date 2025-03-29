@@ -119,6 +119,7 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
         print('Starting frames in current scenes:')
         print(start_frame_index)
         for ei in range(eval_cfg.num_sim_per_scene):
+            print(f'DEBUG: current at {scene_i}')
             guidance_config = None   # for the current batch of scenes
             
             cur_start_frames = [scene_start[ei] for scene_start in start_frame_index]
@@ -171,7 +172,7 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                 horizon=eval_cfg.num_simulation_steps,
                 use_gt=use_gt,
                 start_frames=sim_start_frames,
-            )    
+            ) 
 
             print(info["scene_index"])
             print(sim_start_frames)

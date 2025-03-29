@@ -491,6 +491,7 @@ GUIDANCE_NAME_TO_METRICS = {
     'global_target_pos_at_time' : {'global_target_pos_at_time' : GlobalConstraintGuidance},
     'global_target_pos' :         {'global_target_pos' : GlobalTargetPosGuidance},
     'social_group' :              {'social_group' : SocialGroupGuidance},
+    'mapf_collision':             {'mapf_collision': MapCollisionGuidance}
 }
 
 def guidance_metrics_from_config(guidance_config):

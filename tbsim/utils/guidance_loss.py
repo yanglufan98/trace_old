@@ -539,6 +539,69 @@ class TargetPosLoss(GuidanceLoss):
 
         return loss
 
+class MAPFCollisionLoss(GuidanceLoss):
+    def __init__(self, num_disks=1, buffer_dist=0.2, priority=None):
+        super().__init__()
+        self.num_disks = num_disks
+        self.buffer_dist = buffer_dist
+        self.priority = priority
+    
+    def forward(self, x, data_batch, agt_mask=None):
+        data_extent = data_batch["extent"]
+        data_world_from_agent = data_batch["world_from_agent"]
+        pos_pred = x[..., :2]
+        yaw_pred = x[..., 3:4]
+
+        agt_idx = torch.arrange(pos_pred.shape[0]).to(pos_pred.device)
+        if agt_mask is not None:
+            data_world_from_agent = data_world_from_agent[agt_mask]
+            pos_pred = pos_pred[agt_mask]
+            yaw_pred = yaw_pred[agt_mask]
+            agt_idx = agt_idx[agt_mask]
+        
+        if self.priority is None or len(self.priority) == 0:
+            # if there's no agent with higher priority, no loss is needed
+            import pdb; pdb.set_trace()
+            return torch.zeros(pos_pred.shape[0], device=pos_pred.device)
+        
+        import pdb; pdb.set_trace()
+        pos_pred_global, _ = transform_agents_to_world(pos_pred, yaw_pred, data_world_from_agent)
+
+        # current_agent = agt_idx[0]
+        current_agent = agt_mask[0]
+
+        B, N, T, _ = pos_pred_global.size()
+        import pdb; pdb.set_trace()
+
+        flat_pos = pos_pred_global.transpose(0, 2).reshape((T*N, B, 2))
+        import pdb; pdb.set_trace()
+
+        collision_loss = torch.zeros((B), device=pos_pred.device)
+        import pdb; pdb.set_trace()
+        for higher_priority_agent in self.priority:
+            import pdb; pdb.set_trace()
+            agent_dist = torch.norm(
+                flat_pos[:, current_agent: current_agent+1] -
+                flat_pos[:, higher_priority_agent: higher_priority_agent+1].detach(),
+                dim=-1
+            )
+            import pdb; pdb.set_trace()
+
+            safe_dist = (
+                torch.norm(data_extent[current_agent, :2], dim=-1) / 2 +
+                torch.norm(data_extent[higher_priority_agent, : 2], dim=-1)/2 +
+                self.buffer_dist
+            )
+            import pdb; pdb.set_trace()
+
+            # penalty for agent collision
+            dist_violation = F.relu(safe_dist - agent_dist)
+            import pdb; pdb.set_trace()
+            collision_loss[current_agent] += torch.sum(dist_violation)
+            import pdb; pdb.set_trace()
+        
+        return collision_loss
+
 def compute_progress_loss(pos_pred, tgt_pos, urgency,
                           tgt_time=None,
                           pref_speed=1.42,
@@ -860,7 +923,8 @@ GUIDANCE_FUNC_MAP = {
     'global_target_pos' : GlobalTargetPosLoss,
     'social_group' : SocialGroupLoss,
     'min_speed' : MinSpeedLoss,
-    'amp_value' : AmpValueLoss
+    'amp_value' : AmpValueLoss,
+    'mapf_collision': MAPFCollisionLoss
 }
 
 class DiffuserGuidance(object):
