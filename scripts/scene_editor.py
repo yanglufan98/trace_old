@@ -116,10 +116,7 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                 start_frame_index.append(scene_frame_inds)
 
         # how many sims to run for the current batch of scenes
-        print('Starting frames in current scenes:')
-        print(start_frame_index)
         for ei in range(eval_cfg.num_sim_per_scene):
-            print(f'DEBUG: current at {scene_i}')
             guidance_config = None   # for the current batch of scenes
             
             cur_start_frames = [scene_start[ei] for scene_start in start_frame_index]

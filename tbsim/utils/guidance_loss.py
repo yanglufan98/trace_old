@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 
 import torch
 from torch import nn
@@ -544,7 +545,10 @@ class MAPFCollisionLoss(GuidanceLoss):
         super().__init__()
         self.num_disks = num_disks
         self.buffer_dist = buffer_dist
+        self.centroids = None
+
         self.priority = priority
+        self.scene_mask = None
     
     def forward(self, x, data_batch, agt_mask=None):
         data_extent = data_batch["extent"]
@@ -552,55 +556,99 @@ class MAPFCollisionLoss(GuidanceLoss):
         pos_pred = x[..., :2]
         yaw_pred = x[..., 3:4]
 
-        agt_idx = torch.arrange(pos_pred.shape[0]).to(pos_pred.device)
-        if agt_mask is not None:
-            data_world_from_agent = data_world_from_agent[agt_mask]
-            pos_pred = pos_pred[agt_mask]
-            yaw_pred = yaw_pred[agt_mask]
-            agt_idx = agt_idx[agt_mask]
-        
         if self.priority is None or len(self.priority) == 0:
             # if there's no agent with higher priority, no loss is needed
-            import pdb; pdb.set_trace()
-            return torch.zeros(pos_pred.shape[0], device=pos_pred.device)
+            return torch.zeros((pos_pred.shape[0], pos_pred.shape[1]), device=pos_pred.device)[agt_mask]
         
-        import pdb; pdb.set_trace()
-        pos_pred_global, _ = transform_agents_to_world(pos_pred, yaw_pred, data_world_from_agent)
+        agt_in_scene = copy.deepcopy(agt_mask)
+        for agt in self.priority:
+            agt_in_scene[agt] = True
 
-        # current_agent = agt_idx[0]
-        current_agent = agt_mask[0]
+        #agt_idx = torch.arange(pos_pred.shape[0]).to(pos_pred.device)
 
+        if agt_mask is not None:
+            # only want gradient to backprop to agents being guided
+            data_world_from_agent = data_world_from_agent[agt_in_scene]
+            data_extent = data_extent[agt_in_scene]
+            pos_pred = pos_pred[agt_in_scene]
+            yaw_pred = yaw_pred[agt_in_scene]
+            #agt_idx = agt_idx[agt_mask]
+        
+        pos_pred_global, yaw_pred_global = transform_agents_to_world(pos_pred, yaw_pred, data_world_from_agent)
+        
         B, N, T, _ = pos_pred_global.size()
-        import pdb; pdb.set_trace()
+        if self.centroids is None or self.penalty_dists is None:
+            centroids, agt_rad = self.init_disks(self.num_disks, data_extent) # B x num_disks x 2
+            # minimum distance that two vehicle circle centers can be apart without collision (+buffer)
+            penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + self.buffer_dist
+        else:
+            centroids, penalty_dists = self.centroids, self.penalty_dists
+        #import pdb; pdb.set_trace()
+        centroids = centroids[:, None, None].expand(B, N, T, self.num_disks, 2)
 
-        flat_pos = pos_pred_global.transpose(0, 2).reshape((T*N, B, 2))
-        import pdb; pdb.set_trace()
-
-        collision_loss = torch.zeros((B), device=pos_pred.device)
-        import pdb; pdb.set_trace()
-        for higher_priority_agent in self.priority:
-            import pdb; pdb.set_trace()
-            agent_dist = torch.norm(
-                flat_pos[:, current_agent: current_agent+1] -
-                flat_pos[:, higher_priority_agent: higher_priority_agent+1].detach(),
-                dim=-1
-            )
-            import pdb; pdb.set_trace()
-
-            safe_dist = (
-                torch.norm(data_extent[current_agent, :2], dim=-1) / 2 +
-                torch.norm(data_extent[higher_priority_agent, : 2], dim=-1)/2 +
-                self.buffer_dist
-            )
-            import pdb; pdb.set_trace()
-
-            # penalty for agent collision
-            dist_violation = F.relu(safe_dist - agent_dist)
-            import pdb; pdb.set_trace()
-            collision_loss[current_agent] += torch.sum(dist_violation)
-            import pdb; pdb.set_trace()
         
-        return collision_loss
+        # to world
+        s = torch.sin(yaw_pred_global).unsqueeze(-1)
+        c = torch.cos(yaw_pred_global).unsqueeze(-1)
+        rotM = torch.cat((torch.cat((c, s), dim=-1), torch.cat((-s, c), dim=-1)), dim=-2)
+        centroids = torch.matmul(centroids, rotM) + pos_pred_global.unsqueeze(-2)
+
+        if self.scene_mask is None:
+            scene_mask = self.init_mask(data_batch['scene_index'][agt_in_scene], centroids.device)
+        else:
+            scene_mask = self.scene_mask
+
+        centroids = centroids.reshape((T*N, B, self.num_disks, 2))
+        # distances between all pairs of circle between all pairs of agents
+        cur_cent1 = centroids.view(T*N, B, 1, self.num_disks, 2).expand(T*N, B, B, self.num_disks, 2).reshape(T*N*B*B, self.num_disks, 2)
+        cur_cent2 = centroids.view(T*N, 1, B, self.num_disks, 2).expand(T*N, B, B, self.num_disks, 2).reshape(T*N*B*B, self.num_disks, 2)
+        pair_dists = torch.cdist(cur_cent1, cur_cent2).view(T*N*B*B, self.num_disks*self.num_disks)
+        # get minimum distance over all circle pairs between each pair of agents
+        pair_dists = torch.min(pair_dists, 1)[0].view(T*N, B, B)
+
+        penalty_dists = penalty_dists.view(1, B, B)
+
+        is_colliding_mask = torch.logical_and(pair_dists <= penalty_dists,
+                                              scene_mask.view(1, B, B))
+
+        # penality is inverse  normalized distance apart for those already colliding
+        cur_penalties = 1.0 - (pair_dists / penalty_dists)
+        # only compute loss where it's valid and colliding 
+        cur_penalties = torch.where(is_colliding_mask,
+                                    cur_penalties,
+                                    torch.zeros_like(cur_penalties))
+        
+        # summing over timesteps and all other agents to get B x N
+        cur_penalties = cur_penalties.reshape((T, N, B, B))
+        cur_penalties = cur_penalties.sum(0).sum(-1).transpose(0, 1)
+
+        if agt_mask is not None:
+            return cur_penalties[-1:]
+        else:
+            return cur_penalties
+    
+    def init_mask(self, batch_scene_index, device):
+        _, data_scene_index = torch.unique_consecutive(batch_scene_index, return_inverse=True)
+        scene_block_list = []
+        scene_inds = torch.unique_consecutive(data_scene_index)
+        for scene_idx in scene_inds:
+            cur_scene_mask = data_scene_index == scene_idx
+            num_agt_in_scene = torch.sum(cur_scene_mask)
+            cur_scene_block = ~torch.eye(num_agt_in_scene, dtype=torch.bool)
+            scene_block_list.append(cur_scene_block)
+        scene_mask = torch.block_diag(*scene_block_list).to(device)
+        return scene_mask
+    
+    def init_disks(self, num_disks, extents):
+        NA = extents.size(0)
+        agt_rad = extents[:, 1] / 2. # assumes lenght > width
+        cent_min = -(extents[:, 0] / 2.) + agt_rad
+        cent_max = (extents[:, 0] / 2.) - agt_rad
+        # sample disk centroids along x axis
+        cent_x = torch.stack([torch.linspace(cent_min[vidx].item(), cent_max[vidx].item(), num_disks) \
+                                for vidx in range(NA)], dim=0).to(extents.device)
+        centroids = torch.stack([cent_x, torch.zeros_like(cent_x)], dim=2)      
+        return centroids, agt_rad    
 
 def compute_progress_loss(pos_pred, tgt_pos, urgency,
                           tgt_time=None,
