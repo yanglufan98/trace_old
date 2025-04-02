@@ -288,10 +288,34 @@ class DiffuserTrafficModel(pl.LightningModule):
         if guide_with_gt and "target_positions" in obs_dict:
             act_idx = choose_action_from_gt(preds, obs_dict)
         elif cur_policy.current_guidance is not None:
-            guide_losses = preds.pop("guide_losses", None)                
+            guide_losses = preds.pop("guide_losses", None)
+            import pdb; pdb.set_trace()                
             act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, guide_losses)
                     
-        action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])  
+        action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])
+        # this is where we're gonna implement LNS
+        import pdb; pdb.set_trace()
+        # just in case i forgot: action_preds.keys = ['positions', 'yaws', 'diffusion_steps']
+        # action_preds['positions'].shape = [8, 52, 2]
+        # yaws['positions'].shape = [8, 52, 1]
+        # how to get info from guidance: cur_policy.current_guidance.guide_configs[0][0].name =='agent_collision'
+        # wait even without the agent_collision we could still do the LNS
+        # implement LNS
+
+        # input: action_preds, num_iters=5, 
+        if not guide_with_gt:
+            collision_loss = None
+            cur_loss = 0
+            for k, v in guide_losses.items():
+                if 'agent_collision' in k:
+                    collision_loss = v.gather(1, act_idx.unsqueeze(-1))
+                cur_loss += v.gather(1, act_idx.unsqueeze(-1)).squeeze(-1)
+            import pdb; pdb.set_trace()
+            has_collision = self.collision_detection(action_preds, cur_policy, cur_loss, collision_loss)
+            if has_collision:
+                # TODO: get the loss for the current plan
+                best_score = None
+                action_preds= self.large_neighborhood_search(action_preds, best_score)
 
         info = dict(
             action_samples=Action(
@@ -325,3 +349,46 @@ class DiffuserTrafficModel(pl.LightningModule):
         if self.use_ema:
             cur_policy = self.ema_policy
         cur_policy.clear_guidance()
+    
+    def large_neighborhood_search(self, action_preds, best_score, num_iters=5):
+        """
+        action_preds: dict. keys=['positions', 'yaws', 'diffusion_steps']
+        action_preds['positions'].shape = [8, 52, 2]
+        action_preds['yaws'].shape = [8, 52, 1]
+        """
+        positions = action_preds['positions']
+        yaws = action_preds['yaws']
+        best_score = best_score
+
+        for _ in range(num_iters):
+            # break current solution
+            fixed_pos, fixed_yaws, destroy_mask = break_solution(positions, yaws)
+
+            # replan destroyed parts
+            new_pos, new_yaws = replan_destroyed(fixed_pos, fixed_yaws, destroy_mask)
+
+            #i don't think this is the correct version of LNS
+            cur_loss = evaluate(new_pos, new_yaws)
+
+            if cur_loss < best_score:
+                # update solution
+                positions = new_pos
+                yaws = new_yaws
+            
+            if best_score <= 1e-4:
+                break
+        
+        action_preds['positions'] = positions
+        action_preds['yaws'] = yaws
+        
+        return action_preds
+    
+    def collision_detection(self, action_preds, cur_policy, cur_loss, collision_loss):
+        """
+        guide_losses: dict. keys = configs.name. value = tensor, shape=[N,B]
+        """
+        if 'agent_collision' in cur_policy.current_guidance.guide_configs[0][0]:
+            # if agent collision already calculated -> return the stored value
+            return collision_loss > 0
+        
+            

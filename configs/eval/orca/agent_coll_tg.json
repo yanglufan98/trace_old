@@ -1,5 +1,5 @@
 {
-    "name": "orca_map_open_loop_target_pos_all_coll",
+    "name": "orca_map_open_loop_agent_coll",
     "env": "trajdata",
     "dataset_path": null,
     "eval_class": "Diffuser",
@@ -13,7 +13,7 @@
     "agent_eval_class": null,
     "ckpt_root_dir": "checkpoints/",
     "experience_hdf5_path": null,
-    "results_dir": "orca_map_open_loop_target_pos_all_coll/",
+    "results_dir": "orca_map_open_loop_agent_coll/",
     "ckpt": {
         "policy": {
             "ngc_job_id": null,
@@ -157,15 +157,13 @@
         "constraint_config": [],
         "heuristic_config": [
             {
-                "name": "mapf_collision",
+                "name": "agent_collision",
                 "weight": 1000.0,
-                "params":{
+                "params": {
                     "num_disks": 1,
-                    "buffer_dist": 0.2,
-                    "priority": null
+                    "buffer_dist": 0.2
                 }
             },
-
             {
                 "name": "target_pos",
                 "weight": 30000.0,
