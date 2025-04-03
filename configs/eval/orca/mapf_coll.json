@@ -158,7 +158,7 @@
         "heuristic_config": [
             {
                 "name": "mapf_collision",
-                "weight": 1000.0,
+                "weight": 500.0,
                 "params":{
                     "num_disks": 1,
                     "buffer_dist": 0.2,

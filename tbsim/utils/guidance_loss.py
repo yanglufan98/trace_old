@@ -563,19 +563,33 @@ class MAPFCollisionLoss(GuidanceLoss):
         agt_in_scene = copy.deepcopy(agt_mask)
         for agt in self.priority:
             agt_in_scene[agt] = True
-
-        #agt_idx = torch.arange(pos_pred.shape[0]).to(pos_pred.device)
-
-        if agt_mask is not None:
-            # only want gradient to backprop to agents being guided
-            data_world_from_agent = data_world_from_agent[agt_in_scene]
-            data_extent = data_extent[agt_in_scene]
-            pos_pred = pos_pred[agt_in_scene]
-            yaw_pred = yaw_pred[agt_in_scene]
-            #agt_idx = agt_idx[agt_mask]
+        
+        # Get predictions for all agents we need to compute collisions with
+        data_world_from_agent = data_world_from_agent[agt_in_scene]
+        data_extent = data_extent[agt_in_scene]
+        pos_pred = pos_pred[agt_in_scene]
+        yaw_pred = yaw_pred[agt_in_scene]
         
         pos_pred_global, yaw_pred_global = transform_agents_to_world(pos_pred, yaw_pred, data_world_from_agent)
         
+        # If we have agt_mask, we only want gradients to backprop to those agents
+        if agt_mask is not None:
+            # Detach predictions for non-guided agents
+            pos_pred_detach = pos_pred_global.detach().clone()
+            yaw_pred_detach = yaw_pred_global.detach().clone()
+
+            # Adjust agt_mask to match the filtered data
+            filtered_agt_mask = agt_mask[agt_in_scene]
+
+            # Only keep gradients for guided agents
+            pos_pred_global = torch.where(filtered_agt_mask[:,None,None,None].expand_as(pos_pred_global),
+                                          pos_pred_global,
+                                          pos_pred_detach)
+            yaw_pred_global = torch.where(filtered_agt_mask[:,None,None,None].expand_as(yaw_pred_global),
+                                          yaw_pred_global,
+                                          yaw_pred_detach)
+
+
         B, N, T, _ = pos_pred_global.size()
         if self.centroids is None or self.penalty_dists is None:
             centroids, agt_rad = self.init_disks(self.num_disks, data_extent) # B x num_disks x 2
@@ -583,10 +597,8 @@ class MAPFCollisionLoss(GuidanceLoss):
             penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + self.buffer_dist
         else:
             centroids, penalty_dists = self.centroids, self.penalty_dists
-        #import pdb; pdb.set_trace()
         centroids = centroids[:, None, None].expand(B, N, T, self.num_disks, 2)
 
-        
         # to world
         s = torch.sin(yaw_pred_global).unsqueeze(-1)
         c = torch.cos(yaw_pred_global).unsqueeze(-1)
@@ -623,7 +635,8 @@ class MAPFCollisionLoss(GuidanceLoss):
         cur_penalties = cur_penalties.sum(0).sum(-1).transpose(0, 1)
 
         if agt_mask is not None:
-            return cur_penalties[-1:]
+            # Only return penalties for guided agents
+            return cur_penalties[filtered_agt_mask]
         else:
             return cur_penalties
     
