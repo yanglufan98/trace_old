@@ -290,7 +290,7 @@ class DiffuserTrafficModel(pl.LightningModule):
         elif cur_policy.current_guidance is not None:
             guide_losses = preds.pop("guide_losses", None)              
             act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, guide_losses)
-                    
+
         action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])
         # this is where we're gonna implement LNS
         # just in case i forgot: action_preds.keys = ['positions', 'yaws', 'diffusion_steps']

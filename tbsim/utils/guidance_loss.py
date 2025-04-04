@@ -11,7 +11,75 @@ from tbsim.models.trace_helpers import (
     transform_agents_to_world,
 )
 
+def evaluate_collision(position, yaw, act_idx):
+    """
+    Evaluate collision loss for a given trajectory selection
+    """
+    # local_frame -> global_frame
+    pos_global, yaw_global = transform_agents_to_world(position, yaw, data_extent, data_world_from_agent)
+    B, T, _ = pos_global.size()
+    # centroids, agt_rad = self.init_disks
+    # centroids = [0,0] for all
+    # penalty_dists = agt_rad.view(B, 1).expnad(B, B) + agt_rad.view(1, B).expand(B, B)
+    # feels like penalty_dists are sth to be seriously considered
+    centroids = pos_global.unsqueeze(-2)
+    scene_mask = init_mask() # TODO: check if we need this
+    
+
+
+
+
 ### utils for choosing from samples ####
+def reselect_collision_avoidance(act_idx, preds, cur_loss):
+    """
+    For each collision group, find better trajectory combinations to avoid collisions
+    """
+    # Get trajectory predictions
+    position = preds['positions'] # [B, N, T, 2]
+    yaw = preds['yaws'] # [B, N, T, 1]
+    B, N, T, _ = position.shape
+
+    # Evaluate collision loss for current trajectory selection
+    agent_collision_loss = evaluate_collision(position, yaw, act_idx)
+    
+    # Find groups of agents that are colliding
+    collision_groups = find_collision_agent(agent_collision_loss)
+
+    # For each collision group, try to find better trajectory combinations
+    best_loss = cur_loss
+    for group_id, colliding_agents in collision_groups.items():
+        
+        best_indices = None
+        # Try all possible trajectory combinations for colliding agents
+        for traj_indices in itertools.product(range(N), repeat=len(colliding_agents)):
+            # Create temporary trajectory selection
+            temp_act_idx = act_idx.clone()
+            for agent_idx, traj_idx in zip(colliding_agents, traj_indices):
+                temp_act_idx[agent_idx] = traj_idx
+            
+            # Evaluate collision loss for this combination
+            temp_collision_loss = evaluate_collision(position, yaw, temp_act_idx)
+            # Calculate loss for both colliding agents and all other agents
+            cur_loss = temp_collision_loss[colliding_agents].sum() + temp_collision_loss[~torch.isin(torch.arange(B), torch.tensor(colliding_agents))].sum()
+            
+            # Update if better combination found
+            if cur_loss < best_loss:
+                best_loss = cur_loss
+                best_indices = temp_act_idx[colliding_agents].clone()
+        
+        # Apply best trajectory combination found
+        if best_indices is not None:
+            for agent_idx, best_idx in zip(colliding_agents, best_indices):
+                act_idx[agent_idx] = best_idx
+
+    return act_idx
+
+
+            
+
+
+
+
 
 def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
     B, N, T, _ = preds["positions"].size()
@@ -29,16 +97,17 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
         scene_mask = ~torch.isnan(torch.sum(scene_guide_loss, dim=[1,2]))
         scene_guide_loss = scene_guide_loss[scene_mask].cpu()
         scene_guide_loss = torch.nansum(scene_guide_loss, dim=-1)
-        is_scene_level = np.array([guide_cfg.name in ['agent_collision', 'social_group'] for guide_cfg in scene_guide_cfg])
+        is_scene_level = np.array([guide_cfg.name in ['agent_collision', 'social_group', 'mapf_collision'] for guide_cfg in scene_guide_cfg])
         if np.sum(is_scene_level) > 0: 
             # choose which sample minimizes at the scene level (where each sample is a "scene")
             scene_act_idx = torch.argmin(torch.sum(scene_guide_loss, dim=0))
+            cur_loss = torch.min(torch.sum(scene_guide_loss, dim=0))
+            act_idx = reselect_collision_avoidance(act_idx, preds, cur_loss)
         else:
             # each agent can choose the sample that minimizes guidance loss independently
             scene_act_idx = torch.argmin(scene_guide_loss, dim=-1)
 
         act_idx[scene_mask] = scene_act_idx.to(act_idx.device)
-
     return act_idx
 
 def choose_action_from_gt(preds, obs_dict):
@@ -265,7 +334,7 @@ class AgentCollisionLoss(GuidanceLoss):
     def forward(self, x, data_batch, agt_mask=None):
         data_extent = data_batch["extent"]
         data_world_from_agent = data_batch["world_from_agent"]
-
+        import pdb; pdb.set_trace()
         pos_pred = x[..., :2]
         yaw_pred = x[..., 3:4]
 
