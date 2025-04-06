@@ -11,21 +11,59 @@ from tbsim.models.trace_helpers import (
     transform_agents_to_world,
 )
 
-def evaluate_collision(position, yaw, act_idx):
-    """
-    Evaluate collision loss for a given trajectory selection
-    """
-    # local_frame -> global_frame
-    pos_global, yaw_global = transform_agents_to_world(position, yaw, data_extent, data_world_from_agent)
-    B, T, _ = pos_global.size()
-    # centroids, agt_rad = self.init_disks
-    # centroids = [0,0] for all
-    # penalty_dists = agt_rad.view(B, 1).expnad(B, B) + agt_rad.view(1, B).expand(B, B)
-    # feels like penalty_dists are sth to be seriously considered
-    centroids = pos_global.unsqueeze(-2)
-    scene_mask = init_mask() # TODO: check if we need this
-    
 
+class LNS_relect():
+    def __init__(self) -> None:
+        self.scene_mask = None
+        self.num_disk = None
+        self.buffer_dist = None
+
+
+    def init_mask(self, batch_scene_index, device):
+        _, data_scene_index = torch.unique_consecutive(batch_scene_index, return_inverse=True)
+        scene_block_list = []
+        scene_inds = torch.unique_consecutive(data_scene_index)
+        for scene_idx in scene_inds:
+            cur_scene_mask = data_scene_index == scene_idx
+            num_agt_in_scene = torch.sum(cur_scene_mask)
+            cur_scene_block = ~torch.eye(num_agt_in_scene, dtype=torch.bool)
+            scene_block_list.append(cur_scene_block)
+        scene_mask = torch.block_diag(*scene_block_list).to(device)
+        return scene_mask
+    
+    def evaluate_collision(self, position, yaw, act_idx):
+        """
+        Evaluate collision loss for a given trajectory selection
+        """
+        pos_global, yaw_global = transform_agents_to_world(position, yaw, data_extent, data_world_from_agent)
+        B, T, _ = pos_global.size()
+        # centroids, agt_rad = self.init_disks
+        # centroids = [0,0] for all
+        # penalty_dists = agt_rad.view(B, 1).expnad(B, B) + agt_rad.view(1, B).expand(B, B)
+        # feels like penalty_dists are sth to be seriously considered
+        centroids = pos_global.unsqueeze(-2)
+        
+        if self.scene_mask is None:
+            scene_mask = self.init_mask(scene_index, device)
+        else:
+            scene_mask = self.scene_mask
+        
+        # actually what's important for the collision detection is 
+        # TODO: check how we're gonna get agt_rad and buffer_dists this kind of parameters
+        penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + buffer_dist
+
+        is_colliding_mask = torch.logical_and(pair_dists <= penalty_dists,
+                                            scene_mask.view(1, B, B))
+        
+        cur_penalties = 1.0 - (pair_dists / penalty_dists)
+        cur_penalties = torch.where(is_colliding_mask,
+                                    cur_penalties,
+                                    torch.zeros_like(cur_penalties))
+        # TODO: how to determine which agents are colliding?
+        # need to store the info as dict in collision_info
+        collision_info = {}
+
+        return cur_penalties, collision_info
 
 
 
@@ -73,11 +111,6 @@ def reselect_collision_avoidance(act_idx, preds, cur_loss):
                 act_idx[agent_idx] = best_idx
 
     return act_idx
-
-
-            
-
-
 
 
 
@@ -334,7 +367,7 @@ class AgentCollisionLoss(GuidanceLoss):
     def forward(self, x, data_batch, agt_mask=None):
         data_extent = data_batch["extent"]
         data_world_from_agent = data_batch["world_from_agent"]
-        import pdb; pdb.set_trace()
+
         pos_pred = x[..., :2]
         yaw_pred = x[..., 3:4]
 
@@ -359,6 +392,7 @@ class AgentCollisionLoss(GuidanceLoss):
             penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + self.buffer_dist
         else:
             centroids, penalty_dists = self.centroids, self.penalty_dists
+        import pdb; pdb.set_trace()
         centroids = centroids[:,None,None].expand(B, N, T, self.num_disks, 2)
         # to world
         s = torch.sin(yaw_pred_global).unsqueeze(-1)
