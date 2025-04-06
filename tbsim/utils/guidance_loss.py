@@ -18,7 +18,6 @@ class LNS_relect():
         self.num_disk = None
         self.buffer_dist = None
 
-
     def init_mask(self, batch_scene_index, device):
         _, data_scene_index = torch.unique_consecutive(batch_scene_index, return_inverse=True)
         scene_block_list = []
@@ -31,6 +30,53 @@ class LNS_relect():
         scene_mask = torch.block_diag(*scene_block_list).to(device)
         return scene_mask
     
+    def reselect(self, act_idx, preds):
+        """
+        choose the best combination out of all possible ones
+        cur_combination: act_idex, preds, cur_loss
+        """
+        # NOTE: only agent_collision is implemented
+        # should consider more criteria, eg.map_collision, social group
+        position = preds['positions']
+        yaw = preds['yaws']
+        B, N, T, _ = position.shape
+        
+        # Evaluate collision loss for current trajectory selection
+        cur_loss = self.evaluate_collision(position, yaw, act_idx)
+
+        # Find groups of agents that are colliding
+        collision_groups = self.find_collision_agent(cur_loss)
+
+        # TODO: Find all the possible routes for each agent. eg. should at least reach the target/avoid map_collision
+        # the agent_collision
+
+        best_loss = cur_loss
+        for group_id, colliding_agents in collision_groups.items():
+            best_indices = None
+            # Try all possible trajectory combinations for colliding agents
+            for traj_indices in itertools.product(range(N), repeat=len(colliding_agents)):
+                # Create temporary trajectory selection
+                temp_act_idx = act_idx.clone()
+                for agent_idx, traj_idx in zip(colliding_agents, traj_indices):
+                    temp_act_idx[agent_idx] = traj_idx
+
+                # Evaluate collision loss for this combination
+                temp_collision_loss = self.evaluate_collision(position, yaw, temp_act_idx)
+                # Calculate loss for both colliding agents and all other agents
+                cur_loss = temp_collision_loss[colliding_agents].sum() + temp_collision_loss[~torch.isin(torch.arange(B), torch.tensor(colliding_agents))].sum()
+                
+                # Update if better combination found
+                if cur_loss < best_loss:
+                    best_loss = cur_loss
+                    best_indices = temp_act_idx[colliding_agents].clone()
+            
+            # Apply best trajectory combination found
+            if best_indices is not None:
+                for agent_idx, best_idx in zip(colliding_agents, best_indices):
+                    act_idx[agent_idx] = best_idx
+
+        return act_idx
+
     def evaluate_collision(self, position, yaw, act_idx):
         """
         Evaluate collision loss for a given trajectory selection
@@ -72,16 +118,6 @@ def reselect_collision_avoidance(act_idx, preds, cur_loss):
     """
     For each collision group, find better trajectory combinations to avoid collisions
     """
-    # Get trajectory predictions
-    position = preds['positions'] # [B, N, T, 2]
-    yaw = preds['yaws'] # [B, N, T, 1]
-    B, N, T, _ = position.shape
-
-    # Evaluate collision loss for current trajectory selection
-    agent_collision_loss = evaluate_collision(position, yaw, act_idx)
-    
-    # Find groups of agents that are colliding
-    collision_groups = find_collision_agent(agent_collision_loss)
 
     # For each collision group, try to find better trajectory combinations
     best_loss = cur_loss
