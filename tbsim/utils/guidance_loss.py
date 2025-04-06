@@ -12,6 +12,10 @@ from tbsim.models.trace_helpers import (
 )
 
 
+
+
+
+### utils for choosing from samples ####
 class LNS_relect():
     def __init__(self) -> None:
         self.scene_mask = None
@@ -110,44 +114,6 @@ class LNS_relect():
         collision_info = {}
 
         return cur_penalties, collision_info
-
-
-
-### utils for choosing from samples ####
-def reselect_collision_avoidance(act_idx, preds, cur_loss):
-    """
-    For each collision group, find better trajectory combinations to avoid collisions
-    """
-
-    # For each collision group, try to find better trajectory combinations
-    best_loss = cur_loss
-    for group_id, colliding_agents in collision_groups.items():
-        
-        best_indices = None
-        # Try all possible trajectory combinations for colliding agents
-        for traj_indices in itertools.product(range(N), repeat=len(colliding_agents)):
-            # Create temporary trajectory selection
-            temp_act_idx = act_idx.clone()
-            for agent_idx, traj_idx in zip(colliding_agents, traj_indices):
-                temp_act_idx[agent_idx] = traj_idx
-            
-            # Evaluate collision loss for this combination
-            temp_collision_loss = evaluate_collision(position, yaw, temp_act_idx)
-            # Calculate loss for both colliding agents and all other agents
-            cur_loss = temp_collision_loss[colliding_agents].sum() + temp_collision_loss[~torch.isin(torch.arange(B), torch.tensor(colliding_agents))].sum()
-            
-            # Update if better combination found
-            if cur_loss < best_loss:
-                best_loss = cur_loss
-                best_indices = temp_act_idx[colliding_agents].clone()
-        
-        # Apply best trajectory combination found
-        if best_indices is not None:
-            for agent_idx, best_idx in zip(colliding_agents, best_indices):
-                act_idx[agent_idx] = best_idx
-
-    return act_idx
-
 
 
 def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
