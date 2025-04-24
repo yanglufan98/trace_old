@@ -5,6 +5,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+import itertools
+
 import tbsim.utils.geometry_utils as GeoUtils
 from tbsim.utils.metrics import batch_detect_off_road
 from tbsim.models.trace_helpers import (
@@ -16,23 +18,33 @@ from tbsim.models.trace_helpers import (
 
 
 ### utils for choosing from samples ####
-class LNS_relect():
-    def __init__(self) -> None:
-        self.scene_mask = None
-        self.num_disk = None
-        self.buffer_dist = None
+class UnionFind:
+    def __init__(self, size):
+        self.parent = list(range(size))
+    
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])  # 路径压缩
+        return self.parent[x]
+    
+    def union(self, x, y):
+        px, py = self.find(x), self.find(y)
+        if px != py:
+            self.parent[py] = px
 
-    def init_mask(self, batch_scene_index, device):
-        _, data_scene_index = torch.unique_consecutive(batch_scene_index, return_inverse=True)
-        scene_block_list = []
-        scene_inds = torch.unique_consecutive(data_scene_index)
-        for scene_idx in scene_inds:
-            cur_scene_mask = data_scene_index == scene_idx
-            num_agt_in_scene = torch.sum(cur_scene_mask)
-            cur_scene_block = ~torch.eye(num_agt_in_scene, dtype=torch.bool)
-            scene_block_list.append(cur_scene_block)
-        scene_mask = torch.block_diag(*scene_block_list).to(device)
-        return scene_mask
+class LNS_reselect():
+    def __init__(self, num_agent, guide_cfg=None, **kwargs):
+        self.num_agent = num_agent
+        self.num_disk = kwargs.get('num_disk', None)
+        self.buffer_dist = kwargs.get('buffer_dist', None)
+        self.guide_cfg = guide_cfg
+        self.data_extent = kwargs.get('data_extent', None)
+        self.data_world_from_agent = kwargs.get('world_from_agent', None)
+        self.agt_rad = kwargs.get('agt_rad', None)
+        self.device = kwargs.get('device', 'cpu')
+        # TODO: got to find a better way to incoporate agt_rad
+        self.penalty_dists = (self.agt_rad * torch.ones((num_agent, 1), device=self.device)).expand(num_agent, num_agent) + \
+            (self.agt_rad * torch.ones((1, num_agent), device=self.device)).expand(num_agent, num_agent) + self.buffer_dist
     
     def reselect(self, act_idx, preds):
         """
@@ -44,79 +56,115 @@ class LNS_relect():
         position = preds['positions']
         yaw = preds['yaws']
         B, N, T, _ = position.shape
-        
-        # Evaluate collision loss for current trajectory selection
-        cur_loss = self.evaluate_collision(position, yaw, act_idx)
-
+        batch_indices = torch.arange(B, device=self.device)
+        cur_position = position[batch_indices, act_idx]
+        cur_yaw = yaw[batch_indices, act_idx] 
+        cur_loss = self.evaluate_collision(cur_position, cur_yaw)
+        if cur_loss.max() <= 1e-5:
+            # no collision in this scene
+            return act_idx
+        import pdb; pdb.set_trace()
         # Find groups of agents that are colliding
         collision_groups = self.find_collision_agent(cur_loss)
 
         # TODO: Find all the possible routes for each agent. eg. should at least reach the target/avoid map_collision
         # the agent_collision
 
+        print("DEBUG: cur_loss and collision_groups initialized")
+        import pdb; pdb.set_trace()
         best_loss = cur_loss
-        for group_id, colliding_agents in collision_groups.items():
+        for _, colliding_agents in collision_groups.items():
             best_indices = None
             # Try all possible trajectory combinations for colliding agents
             for traj_indices in itertools.product(range(N), repeat=len(colliding_agents)):
+                print("DEBUG: check itertools.product")
+                import pdb; pdb.set_trace()
                 # Create temporary trajectory selection
                 temp_act_idx = act_idx.clone()
                 for agent_idx, traj_idx in zip(colliding_agents, traj_indices):
                     temp_act_idx[agent_idx] = traj_idx
-
+                
                 # Evaluate collision loss for this combination
-                temp_collision_loss = self.evaluate_collision(position, yaw, temp_act_idx)
+                print("DEBUG: check how to use temp_act_idx as index")
+                import pdb; pdb.set_trace()
+                temp_collision_loss = self.evaluate_collision(position[temp_act_idx], yaw[temp_act_idx] )
                 # Calculate loss for both colliding agents and all other agents
                 cur_loss = temp_collision_loss[colliding_agents].sum() + temp_collision_loss[~torch.isin(torch.arange(B), torch.tensor(colliding_agents))].sum()
                 
                 # Update if better combination found
                 if cur_loss < best_loss:
+                    print("got a better plan")
+                    import pdb; pdb.set_trace()
                     best_loss = cur_loss
                     best_indices = temp_act_idx[colliding_agents].clone()
             
             # Apply best trajectory combination found
             if best_indices is not None:
+                import pdb; pdb.set_trace()
                 for agent_idx, best_idx in zip(colliding_agents, best_indices):
                     act_idx[agent_idx] = best_idx
-
+        print("DEBUG: before return")
+        import pdb; pdb.set_trace()
         return act_idx
 
-    def evaluate_collision(self, position, yaw, act_idx):
+    def evaluate_collision(self, position, yaw):
         """
         Evaluate collision loss for a given trajectory selection
         """
-        pos_global, yaw_global = transform_agents_to_world(position, yaw, data_extent, data_world_from_agent)
-        B, T, _ = pos_global.size()
-        # centroids, agt_rad = self.init_disks
-        # centroids = [0,0] for all
-        # penalty_dists = agt_rad.view(B, 1).expnad(B, B) + agt_rad.view(1, B).expand(B, B)
-        # feels like penalty_dists are sth to be seriously considered
+        # agent_frame to global_frame
+        position = position.unsqueeze(1)
+        yaw = yaw.unsqueeze(1)
+        pos_global, yaw_global = transform_agents_to_world(position, yaw, self.data_world_from_agent)
+        B, _, T, _ = pos_global.size()
         centroids = pos_global.unsqueeze(-2)
-        
-        if self.scene_mask is None:
-            scene_mask = self.init_mask(scene_index, device)
-        else:
-            scene_mask = self.scene_mask
-        
-        # actually what's important for the collision detection is 
-        # TODO: check how we're gonna get agt_rad and buffer_dists this kind of parameters
-        penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + buffer_dist
+        centroids = centroids.transpose(0,2) # (T, 1, B, self.num_disks, 2)
+        centroids = centroids.reshape((T, B, 1, 2))
+        cur_cent1 = centroids.view(T, B, 1, 1, 2).expand(T, B, B, 1, 2).reshape(T*B*B, 1, 2)
+        cur_cent2 = centroids.view(T, 1, B, 1, 2).expand(T, B, B, 1, 2).reshape(T*B*B, 1, 2)
+        pair_dists = torch.cdist(cur_cent1, cur_cent2).view(T*B*B, 1)
+        pair_dists = torch.min(pair_dists, 1)[0].view(T, B, B)
 
-        is_colliding_mask = torch.logical_and(pair_dists <= penalty_dists,
-                                            scene_mask.view(1, B, B))
-        
-        cur_penalties = 1.0 - (pair_dists / penalty_dists)
+        is_colliding_mask = pair_dists <= self.penalty_dists
+        cur_penalties = 1.0 - (pair_dists / self.penalty_dists)
         cur_penalties = torch.where(is_colliding_mask,
                                     cur_penalties,
                                     torch.zeros_like(cur_penalties))
-        # TODO: how to determine which agents are colliding?
-        # need to store the info as dict in collision_info
-        collision_info = {}
+        # Set diagonal elements to 0 to avoid self-collision penalties
+        eye_mask = torch.eye(B, device=cur_penalties.device).unsqueeze(0).expand_as(cur_penalties)
+        cur_penalties = torch.where(eye_mask.bool(), torch.zeros_like(cur_penalties), cur_penalties)
 
-        return cur_penalties, collision_info
+        return cur_penalties
+    
+    def find_collision_agent(self, collision_loss):
+        """
+        Group agents based on collision history.
+        Args:
+            collision_loss: shape [T,B,B] where T is horizon, B is num_agents
+        Returns:
+            List of agent groups where agents in same group have collided at some point
+        """
+        print("DEBUG: in the find collision agent func")
+        T, B, _ = collision_loss.shape
+        uf = UnionFind(B)
+        
+        for t in range(T):
+            for i in range(B):
+                for j in range(i + 1, B):
+                    if collision_loss[t, i, j] > 0:
+                        uf.union(i, j)
+        
+        # group each agent according to the root node
+        from collections import defaultdict
+        groups_dict = defaultdict(set)
+        for i in range(B):
+            root = uf.find(i)
+            groups_dict[root].add(i)
+        
+        import pdb; pdb.set_trace()
+        return list(groups_dict.values())
 
 
-def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
+def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LNS):
     B, N, T, _ = preds["positions"].size()
     # arbitrarily use the first sample as the action if no guidance given
     act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device)
@@ -128,20 +176,40 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses):
         scene_guide_cfg = guide_configs[sidx]
         ends = scount + len(scene_guide_cfg)
         scene_guide_loss = accum_guide_loss[..., scount:ends]
-        scount = ends
+        # import pdb; pdb.set_trace()
+        scene_guide_loss = torch.nan_to_num(scene_guide_loss, nan=0.0)
         scene_mask = ~torch.isnan(torch.sum(scene_guide_loss, dim=[1,2]))
+        # import pdb; pdb.set_trace()
         scene_guide_loss = scene_guide_loss[scene_mask].cpu()
         scene_guide_loss = torch.nansum(scene_guide_loss, dim=-1)
+        # import pdb; pdb.set_trace()
         is_scene_level = np.array([guide_cfg.name in ['agent_collision', 'social_group', 'mapf_collision'] for guide_cfg in scene_guide_cfg])
         if np.sum(is_scene_level) > 0: 
             # choose which sample minimizes at the scene level (where each sample is a "scene")
             scene_act_idx = torch.argmin(torch.sum(scene_guide_loss, dim=0))
-            cur_loss = torch.min(torch.sum(scene_guide_loss, dim=0))
-            act_idx = reselect_collision_avoidance(act_idx, preds, cur_loss)
         else:
             # each agent can choose the sample that minimizes guidance loss independently
             scene_act_idx = torch.argmin(scene_guide_loss, dim=-1)
-
+        # import pdb; pdb.set_trace()
+        if not LNS:
+            print('DEBUG: LNS not used')
+            #import pdb; pdb.set_trace()
+        elif LNS == 'reselect':
+            buffer_dist = 0.2
+            agt_rad=torch.tensor(0.4, device=preds["positions"].device)
+            #TODO: check if num_agent == len(scene_mask)
+            LNS = LNS_reselect(num_agent=scene_guide_loss.shape[0], guide_cfg=scene_guide_cfg, 
+                               buffer_dist=buffer_dist,
+                               data_extent=obs_dict['extent'],
+                               world_from_agent=obs_dict['world_from_agent'],
+                               agt_rad=agt_rad,
+                               device=preds["positions"].device)
+            # TODO: apply to multiple scene in a sim
+            scene_act_idx = LNS.reselect(scene_act_idx, preds)
+        else:
+            raise NotImplementedError('only reselect is implemented')
+        
+        scount = ends
         act_idx[scene_mask] = scene_act_idx.to(act_idx.device)
     return act_idx
 
@@ -351,7 +419,7 @@ class AgentCollisionLoss(GuidanceLoss):
         # sample disk centroids along x axis
         cent_x = torch.stack([torch.linspace(cent_min[vidx].item(), cent_max[vidx].item(), num_disks) \
                                 for vidx in range(NA)], dim=0).to(extents.device)
-        centroids = torch.stack([cent_x, torch.zeros_like(cent_x)], dim=2)      
+        centroids = torch.stack([cent_x, torch.zeros_like(cent_x)], dim=2)    
         return centroids, agt_rad
 
     def init_mask(self, batch_scene_index, device):
@@ -394,7 +462,7 @@ class AgentCollisionLoss(GuidanceLoss):
             penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + self.buffer_dist
         else:
             centroids, penalty_dists = self.centroids, self.penalty_dists
-        import pdb; pdb.set_trace()
+
         centroids = centroids[:,None,None].expand(B, N, T, self.num_disks, 2)
         # to world
         s = torch.sin(yaw_pred_global).unsqueeze(-1)
@@ -426,14 +494,12 @@ class AgentCollisionLoss(GuidanceLoss):
         penalty_dists = penalty_dists.view(1, B, B)
         is_colliding_mask = torch.logical_and(pair_dists <= penalty_dists,
                                               scene_mask.view(1, B, B))
-
         # penalty is inverse normalized distance apart for those already colliding
         cur_penalties = 1.0 - (pair_dists / penalty_dists)
         # only compute loss where it's valid and colliding
         cur_penalties = torch.where(is_colliding_mask,
                                     cur_penalties,
                                     torch.zeros_like(cur_penalties))
-                                        
         # summing over timesteps and all other agents to get B x N
         cur_penalties = cur_penalties.reshape((T, N, B, B))
         cur_penalties = cur_penalties.sum(0).sum(-1).transpose(0, 1)

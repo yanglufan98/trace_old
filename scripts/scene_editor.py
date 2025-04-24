@@ -169,6 +169,7 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                 horizon=eval_cfg.num_simulation_steps,
                 use_gt=use_gt,
                 start_frames=sim_start_frames,
+                LNS=eval_cfg.LNS,
             ) 
 
             print(info["scene_index"])
@@ -344,6 +345,14 @@ if __name__ == "__main__":
         help="outputs the ground truth rollout instead of predictions"
     )
 
+    parser.add_argument(
+        "--LNS",
+        type=str,
+        choices=["reselect", "regenerate", None],
+        default=None,
+        help="LNS mode: 'reselect' for reselection, 'regenerate' for regeneration, None/False for no LNS"
+    )
+
     #
     # Editing options
     #
@@ -395,6 +404,8 @@ if __name__ == "__main__":
         cfg.edits.editing_source = args.editing_source
     if not isinstance(cfg.edits.editing_source, list):
         cfg.edits.editing_source = [cfg.edits.editing_source]
+
+    cfg.LNS = args.LNS
 
     cfg.experience_hdf5_path = os.path.join(cfg.results_dir, "data.hdf5")
 

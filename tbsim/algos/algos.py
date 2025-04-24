@@ -108,7 +108,7 @@ class DiffuserTrafficModel(pl.LightningModule):
         else:
             return {"valLoss": "val/losses_diffusion_loss"}
 
-    def forward(self, obs_dict, num_samp=1, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False):
+    def forward(self, obs_dict, num_samp=1, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False, LNS=None):
         cur_policy = self.nets["policy"]
         # this function is only called at validation time, so use ema
         if self.use_ema:
@@ -264,7 +264,9 @@ class DiffuserTrafficModel(pl.LightningModule):
                     guide_as_filter_only=False,
                     guide_with_gt=False,
                     guide_clean=False,
+                    LNS=None,
                     **kwargs):
+        
         cur_policy = self.nets["policy"]
         # use EMA for val
         if self.use_ema:
@@ -275,6 +277,7 @@ class DiffuserTrafficModel(pl.LightningModule):
 
         # update with current "global" timestep
         cur_policy.update_guidance(global_t=kwargs['step_index'])
+        #import pdb; pdb.set_trace()
 
         preds = self(obs_dict,
                     num_samp=num_action_samples,
@@ -288,33 +291,12 @@ class DiffuserTrafficModel(pl.LightningModule):
         if guide_with_gt and "target_positions" in obs_dict:
             act_idx = choose_action_from_gt(preds, obs_dict)
         elif cur_policy.current_guidance is not None:
-            guide_losses = preds.pop("guide_losses", None)              
-            act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, guide_losses)
+            guide_losses = preds.pop("guide_losses", None)
+            #import pdb; pdb.set_trace()              
+            act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
+                                                  guide_losses, LNS)
 
         action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])
-        # this is where we're gonna implement LNS
-        # just in case i forgot: action_preds.keys = ['positions', 'yaws', 'diffusion_steps']
-        # action_preds['positions'].shape = [8, 52, 2]
-        # yaws['positions'].shape = [8, 52, 1]
-        # how to get info from guidance: cur_policy.current_guidance.guide_configs[0][0].name =='agent_collision'
-        # wait even without the agent_collision we could still do the LNS
-        # implement LNS
-
-        # input: action_preds, num_iters=5, 
-        if False:
-            if not guide_with_gt:
-                collision_loss = None
-                cur_loss = 0
-                for k, v in guide_losses.items():
-                    if 'agent_collision' in k:
-                        collision_loss = v.gather(1, act_idx.unsqueeze(-1))
-                    cur_loss += v.gather(1, act_idx.unsqueeze(-1)).squeeze(-1)
-                import pdb; pdb.set_trace()
-                has_collision = self.collision_detection(action_preds, cur_policy, collision_loss)
-                if has_collision:
-                    # TODO: get the loss for the current plan
-                    best_score = cur_loss
-                    action_preds= self.large_neighborhood_search(action_preds, best_score)
 
         info = dict(
             action_samples=Action(
@@ -349,68 +331,6 @@ class DiffuserTrafficModel(pl.LightningModule):
             cur_policy = self.ema_policy
         cur_policy.clear_guidance()
     
-    def large_neighborhood_search(self, action_preds, best_score, num_iters=5):
-        """
-        action_preds: dict. keys=['positions', 'yaws', 'diffusion_steps']
-        action_preds['positions'].shape = [8, 52, 2]
-        action_preds['yaws'].shape = [8, 52, 1]
-        """
-        positions = action_preds['positions']
-        yaws = action_preds['yaws']
-        best_score = best_score
-
-        for _ in range(num_iters):
-            # break current solution
-            fixed_pos, fixed_yaws, destroy_mask = break_solution(positions, yaws)
-
-            # replan destroyed parts
-            new_pos, new_yaws = replan_destroyed(fixed_pos, fixed_yaws, destroy_mask)
-
-            #i don't think this is the correct version of LNS
-            cur_loss = evaluate(new_pos, new_yaws)
-
-            if cur_loss < best_score:
-                # update solution
-                positions = new_pos
-                yaws = new_yaws
-            
-            if best_score <= 1e-4:
-                break
-        
-        action_preds['positions'] = positions
-        action_preds['yaws'] = yaws
-        
-        return action_preds
-    
-    def collision_detection(self, action_preds, cur_policy, collision_loss):
-        """
-        guide_losses: dict. keys = configs.name. value = tensor, shape=[N,B]
-        """
-        if collision_loss:
-            # if we've already calculated the collision loss.
-            return collision_loss > 0
-        # else, we need to calculate it in the same way
-        pos_pred = action_preds['positions']
-        yaw_pred = action_preds['yaws']
-        data_world_from_agent = data_batch["world_from_agent"]
-        # TODO: why do we need this... why do we need to transform to world
-        pos_pred_global, yaw_pred_global = transform_agents_to_world(pos_pred, yaw_pred, data_world_from_agent)
-        B, T, _ = pos_pred_global.size()
-        # centroids, agt_rad = init_disks(self.num_disks, data_extent)
-        # penality_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + self.buffer_dist
-        centroids = centroids[:, None, None].expand(B, T, 1,  2) # .expand(B, T, num_disks, 2)
-        # to world
-        s = torch.sin(yaw_pred_global).unsqueeze(-1)
-        c = torch.cos(yaw_pred_global).unsqueeze(-1)
-        rotM = torch.cat((torch.cat((c, s), dim=-1), torch.cat((-s, c), dim=-1)), dim=-2)
-        centroids = torch.matmul(centroids, rotM) + pos_pred_global.unsqueeze(-2)
-
-        # NOTE: first, let's leave scene mask aside
-        centroids = centroids.transpose(0,2) # T x NS x B x D x 2
-        centroids = centroids.reshape((T, B, 1, 2))
-        # centroids = centroids.reshape((T*N, B, self.num_disks, 2))
-        cur_cent1 = centroids.view(T, B, 1, 1, 2)
-
 
         
             

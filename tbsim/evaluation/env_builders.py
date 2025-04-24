@@ -100,3 +100,17 @@ class EnvUnifiedBuilder(EnvironmentBuilder):
         )
 
         return env
+    
+
+class EnvGymBuilder(EnvironmentBuilder):
+    def get_env(self):
+        exp_cfg = self.exp_cfg.clone()
+        exp_cfg.unlock()
+        exp_cfg.env.simulation.num_simulation_steps = self.eval_cfg.num_simulation_steps
+        exp_cfg.env.simulation.start_frame_index = exp_cfg.algo.history_num_frames + 1
+        exp_cfg.lock()
+
+        # TODO: should it be unified simulation or should i set another GymSimulation
+        env = EnvUnifiedSimulation()
+
+        return env

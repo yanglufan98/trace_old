@@ -18,6 +18,7 @@ def guided_rollout(
     horizon=None,
     use_gt=False,
     start_frames=None,
+    LNS=None,
 ):
     """
     Rollout an environment.
@@ -69,7 +70,7 @@ def guided_rollout(
             obs_torch = TensorUtils.to_torch(obs, device=device, ignore_if_unspecified=True)
         else:
             obs_torch = obs
-        action = policy.get_action(obs_torch, step_index=counter)
+        action = policy.get_action(obs_torch, step_index=counter, LNS=LNS)
 
         env.step(action, num_steps_to_take=n_step_action, render=False) 
         counter += n_step_action
