@@ -63,6 +63,11 @@ python scripts/scene_editor.py --results_root_dir ./out/orca_mixed_out --num_sce
 This script uses TRACE to control and simulate all agents in each test-set scene. The configuration for evaluation in this example is in `./configs/eval/orca/target_pos.json` and can be changed to modify test-time operation. For example, `class_free_guide_w` determines the strength of classifier-free guidance, `guide_as_filter_only` will only use filtering (i.e. choosing the best sample) and not full test-time guidance, and `guide_clean` determines whether our proposed _clean_ guidance is used or _noisy_ guidance from previous work. Finally, the `heuristic_config` field determines which guidance objectives are used. All guidance objectives are implemented in [`tbsim/utils/guidance_loss.py`](./tbsim/utils/guidance_loss.py).
 
 `./configs/eval/orca` includes additional configurations for the different kinds of guidance presented in the paper.
+To run the ORCA-trained model on the whole ORCA-Maps test set for our poposed priority-based guidance configuration:
+```
+python scripts/scene_editor.py --results_root_dir ./out/orca_mixed_out --num_scenes_per_batch 1 --policy_ckpt_dir ./ckpt/trace/orca_mixed --policy_ckpt_key iter40000 --eval_class Diffuser --render_img --config_file ./configs/eval/orca/mapf_loss.json
+```
+Users can modify the .json files under the ./configs folder to suit their design choices. Multiple guidance strategies can be specified within a single JSON file.
 
 To run the model trained on a mixture of nuScenes and ETH/UCY data on held out nuScenes data:
 ```
