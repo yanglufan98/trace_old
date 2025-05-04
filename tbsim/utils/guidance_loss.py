@@ -726,10 +726,6 @@ class MAPFCollisionLoss(GuidanceLoss):
         data_world_from_agent = data_batch["world_from_agent"]
         pos_pred = x[..., :2]
         yaw_pred = x[..., 3:4]
-
-        if self.priority is None or len(self.priority) == 0:
-            # if there's no agent with higher priority, no loss is needed
-            return torch.zeros((pos_pred.shape[0], pos_pred.shape[1]), device=pos_pred.device)[agt_mask]
         
         agt_in_scene = copy.deepcopy(agt_mask)
         for agt in self.priority:
@@ -781,6 +777,7 @@ class MAPFCollisionLoss(GuidanceLoss):
         else:
             scene_mask = self.scene_mask
 
+        centroids = centroids.transpose(0,2)
         centroids = centroids.reshape((T*N, B, self.num_disks, 2))
         # distances between all pairs of circle between all pairs of agents
         cur_cent1 = centroids.view(T*N, B, 1, self.num_disks, 2).expand(T*N, B, B, self.num_disks, 2).reshape(T*N*B*B, self.num_disks, 2)
