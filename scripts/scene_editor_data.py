@@ -91,6 +91,8 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
     result_stats = None
     scene_i = 0
     eval_scenes = eval_cfg.eval_scenes
+
+
     while scene_i < eval_cfg.num_scenes_to_evaluate:
         scene_indices = eval_scenes[scene_i: scene_i + eval_cfg.num_scenes_per_batch]
         scene_i += eval_cfg.num_scenes_per_batch
@@ -158,13 +160,10 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                 # add to the current guidance config
                 guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
 
-            # goals = generate_goals()
-
             stats, info = guided_rollout(
                 env,
                 rollout_policy,
                 policy_model,
-                # goals,
                 n_step_action=eval_cfg.n_step_action,
                 guidance_config=guidance_config,
                 scene_indices=sim_scene_indices,
@@ -178,6 +177,7 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
             print(info["scene_index"])
             print(sim_start_frames)
             pprint(stats)
+            # import pdb; pdb.set_trace()
 
             # aggregate stats from the same class of guidance within each scene
             #       this helps parse_scene_edit_results
@@ -241,6 +241,14 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                     sim_start_frames,
                     h5_path=eval_cfg.experience_hdf5_path
                 )
+            #import pdb; pdb.set_trace()
+            if data_to_disk and "trajectory" in info:
+                dump_traj_data(
+                    info["trajectory"],
+                    info["scene_index"],
+                    sim_start_frames,
+                    h5_path=eval_cfg.experience_hdf5_path
+                )
             torch.cuda.empty_cache()
 
 
@@ -255,6 +263,20 @@ def dump_episode_buffer(buffer, scene_index, start_frames, h5_path):
     h5_file.close()
     print("scene {} written to {}".format(scene_index, h5_path))
 
+def dump_traj_data(trajectory, scene_index, start_frames, h5_path):
+    import h5py
+    # Modify the h5_path to use traj.hdf5 instead of data.hdf5
+    h5_path = h5_path.replace('data.hdf5', 'traj.hdf5')
+    h5_file = h5py.File(h5_path, "a")
+    
+    for ei, si in zip(start_frames, scene_index):
+        h5key = "/{}_{}/positions".format(si, ei)
+        h5_file.create_dataset(h5key, data=trajectory['positions'])
+        h5key = "/{}_{}/yaws".format(si, ei)
+        h5_file.create_dataset(h5key, data=trajectory['yaws'])
+    
+    h5_file.close()
+    print("trajectory data for scenes {} written to {}".format(scene_index, h5_path))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -46,10 +46,11 @@ class LNS_reselect():
         self.penalty_dists = (self.agt_rad * torch.ones((num_agent, 1), device=self.device)).expand(num_agent, num_agent) + \
             (self.agt_rad * torch.ones((1, num_agent), device=self.device)).expand(num_agent, num_agent) + self.buffer_dist
     
-    def reselect(self, act_idx, preds):
+    def reselect(self, act_idx, preds, scene_guide_loss):
         """
         choose the best combination out of all possible ones
         cur_combination: act_idex, preds, cur_loss
+        scene_guide_loss: torch.tensor([num_agent, batch_size]), the sum of all the none scene-level guidance
         """
         # NOTE: only agent_collision is implemented
         # should consider more criteria, eg.map_collision, social group
@@ -165,6 +166,10 @@ class LNS_reselect():
 
 
 def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LNS):
+    """
+    preds: dict, keys=['positions', 'yaws', 'diffusion_steps']
+    obs_dict: dict, keys is the same with env.get_observation
+    """
     B, N, T, _ = preds["positions"].size()
     # arbitrarily use the first sample as the action if no guidance given
     act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device)
@@ -178,6 +183,14 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
         scene_guide_loss = accum_guide_loss[..., scount:ends]
         # import pdb; pdb.set_trace()
         scene_guide_loss = torch.nan_to_num(scene_guide_loss, nan=0.0)
+        nscene_level_guide_loss = None
+        for i, guide_cfg in enumerate(scene_guide_cfg):
+            if guide_cfg.name not in ['agent_collision', 'social_group']:
+                if nscene_level_guide_loss is None:
+                    nscene_level_guide_loss = scene_guide_loss[..., i]
+                else:
+                    nscene_level_guide_loss = torch.stack((nscene_level_guide_loss, scene_guide_loss[..., i]), dim=-1)
+
         scene_mask = ~torch.isnan(torch.sum(scene_guide_loss, dim=[1,2]))
         # import pdb; pdb.set_trace()
         scene_guide_loss = scene_guide_loss[scene_mask].cpu()
@@ -205,7 +218,7 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
                                agt_rad=agt_rad,
                                device=preds["positions"].device)
             # TODO: apply to multiple scene in a sim
-            scene_act_idx = LNS.reselect(scene_act_idx, preds)
+            scene_act_idx = LNS.reselect(scene_act_idx, preds, nscene_level_guide_loss)
         else:
             raise NotImplementedError('only reselect is implemented')
         
@@ -722,6 +735,7 @@ class MAPFCollisionLoss(GuidanceLoss):
         self.scene_mask = None
     
     def forward(self, x, data_batch, agt_mask=None):
+        import pdb; pdb.set_trace()
         data_extent = data_batch["extent"]
         data_world_from_agent = data_batch["world_from_agent"]
         pos_pred = x[..., :2]

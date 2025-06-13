@@ -702,7 +702,6 @@ class DiffuserModel(nn.Module):
         # convert action to state+action
         if self.diffuser_input_mode == 'state_and_action':
             x_out = self.convert_action_to_state_and_action(x_out, aux_info)
-        
         return x_out, guide_losses
 
         
@@ -770,7 +769,6 @@ class DiffuserModel(nn.Module):
         batch_size = data_batch['history_positions'].size()[0]
         horizon = horizon or self.horizon
         shape = (batch_size, num_samp, horizon, self.transition_dim)
-
         return self.p_sample_loop(shape, data_batch, num_samp, class_free_guide_w=class_free_guide_w, **kwargs)
 
     #------------------------------------------ training ------------------------------------------#

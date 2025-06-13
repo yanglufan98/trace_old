@@ -277,24 +277,34 @@ class DiffuserTrafficModel(pl.LightningModule):
 
         # update with current "global" timestep
         cur_policy.update_guidance(global_t=kwargs['step_index'])
-        #import pdb; pdb.set_trace()
 
         preds = self(obs_dict,
                     num_samp=num_action_samples,
                     class_free_guide_w=class_free_guide_w,
                     guide_as_filter_only=guide_as_filter_only,
-                    guide_clean=guide_clean) # [B, N, T, 2]
+                    guide_clean=guide_clean) # [N, T, 2]
         B, N, T, _ = preds["positions"].size()
 
-        # arbitrarily use the first sample as the action by default
-        act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device) 
-        if guide_with_gt and "target_positions" in obs_dict:
+        #status = self.collision_check
+        # select the agent_level best trajectory - for constraint creation
+        act_idx = torch.zeros((1), dtype=torch.long, device=preds['positions'].device)
+        if guide_with_gt:
             act_idx = choose_action_from_gt(preds, obs_dict)
         elif cur_policy.current_guidance is not None:
             guide_losses = preds.pop("guide_losses", None)
-            #import pdb; pdb.set_trace()              
             act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
                                                   guide_losses, LNS)
+
+        # # arbitrarily use the first sample as the action by default
+        # act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device) 
+        # if guide_with_gt and "target_positions" in obs_dict:
+        #     act_idx = choose_action_from_gt(preds, obs_dict)
+        # elif cur_policy.current_guidance is not None:
+        #     guide_losses = preds.pop("guide_losses", None)
+        #     # cur_policy: DiffuserModel, cur_policy.current_guidance: DiffuserGuidance
+        #     # LNS: 'reselect' or "regenerate"              
+        #     act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
+        #                                           guide_losses, LNS)
 
         action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])
 

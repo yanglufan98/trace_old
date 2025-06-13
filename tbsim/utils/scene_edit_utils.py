@@ -10,6 +10,7 @@ def guided_rollout(
     env,
     policy,
     policy_model,
+    #goals,
     n_step_action=1,
     guidance_config=None,
     scene_indices=None,
@@ -65,12 +66,15 @@ def guided_rollout(
     counter = 0
     while not done:
         obs = env.get_observation()
+        # goal = generate_goal(obs)
         if obs_to_torch:
             device = policy.device if device is None else device
             obs_torch = TensorUtils.to_torch(obs, device=device, ignore_if_unspecified=True)
         else:
             obs_torch = obs
         action = policy.get_action(obs_torch, step_index=counter, LNS=LNS)
+        # root_trajectory_goal = policy.get_action(obs_torch, goals=goals, step_index=counter, LNS=LNS) # [B, T, 3]
+        # action = controller.follow(root_trajectory_goal) #[B, T, dim]
 
         env.step(action, num_steps_to_take=n_step_action, render=False) 
         counter += n_step_action
