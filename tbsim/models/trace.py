@@ -293,7 +293,6 @@ class DiffuserModel(nn.Module):
                                                                     data_batch["extent"],
                                                                     non_cond_avail)
                 non_cond_feat_in = torch.cat([non_cond_feat_in, agent_hist_feat_non_cond], dim=-1)
-
         #
         # neighbor history
         #
@@ -625,6 +624,7 @@ class DiffuserModel(nn.Module):
 
             # compute losses and gradient
             x_loss = x_all.reshape((bsize, num_samp, num_t, 6))
+            # import pdb; pdb.set_trace()
             tot_loss, per_losses = self.current_guidance.compute_guidance_loss(x_loss, data_batch)
             # print(tot_loss)
             tot_loss.backward()

@@ -159,6 +159,8 @@ def run_scene_editor(eval_cfg, save_cfg, data_to_disk, render_to_video, render_t
                 guidance_config = merge_guidance_configs(guidance_config, heuristic_guidance_cfg)
 
             # goals = generate_goals()
+            # get the goal location(target pos) for every agent in the scene
+            
 
             stats, info = guided_rollout(
                 env,

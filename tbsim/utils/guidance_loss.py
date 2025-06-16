@@ -177,6 +177,7 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
     accum_guide_loss = torch.stack([v for k,v in guide_losses.items()], dim=2)
     # each scene separately since may contain different guidance
     scount = 0
+    # import pdb; pdb.set_trace()
     for sidx in range(len(guide_configs)):
         scene_guide_cfg = guide_configs[sidx]
         ends = scount + len(scene_guide_cfg)
@@ -1187,8 +1188,10 @@ class DiffuserGuidance(object):
             if len(guidance_config_list[si]) > 0:
                 self.guide_configs[si] = [GuidanceConfig.from_dict(cur_cfg) for cur_cfg in guidance_config_list[si]]
                 # initialize each guidance function
+                # import pdb; pdb.set_trace()
                 for guide_cfg in self.guide_configs[si]:
                     guide_cfg.func = GUIDANCE_FUNC_MAP[guide_cfg.name](**guide_cfg.params)
+                    # import pdb; pdb.set_trace()
                     if example_batch is not None:
                         guide_cfg.func.init_for_batch(example_batch)
 
@@ -1211,11 +1214,13 @@ class DiffuserGuidance(object):
                 # mask out non-current current scene
                 for gidx, guide_cfg in enumerate(cur_guide):
                     agt_mask = local_scene_index == si
+                    # import pdb; pdb.set_trace()
                     if guide_cfg.agents is not None:
                         # mask out non-requested agents within the scene
                         cur_scene_inds = torch.nonzero(agt_mask, as_tuple=True)[0]
                         agt_mask_inds = cur_scene_inds[guide_cfg.agents]
                         agt_mask = torch.zeros_like(agt_mask)
+                        # import pdb; pdb.set_trace()
                         agt_mask[agt_mask_inds] = True
                     # compute loss
                     cur_loss = guide_cfg.func(x_loss, data_batch,
