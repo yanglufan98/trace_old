@@ -277,7 +277,6 @@ class DiffuserTrafficModel(pl.LightningModule):
 
         # update with current "global" timestep
         cur_policy.update_guidance(global_t=kwargs['step_index'])
-        #import pdb; pdb.set_trace()
 
         preds = self(obs_dict,
                     num_samp=num_action_samples,
