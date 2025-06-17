@@ -278,23 +278,49 @@ class DiffuserTrafficModel(pl.LightningModule):
         # update with current "global" timestep
         cur_policy.update_guidance(global_t=kwargs['step_index'])
 
-        preds = self(obs_dict,
-                    num_samp=num_action_samples,
-                    class_free_guide_w=class_free_guide_w,
-                    guide_as_filter_only=guide_as_filter_only,
-                    guide_clean=guide_clean) # [B, N, T, 2]
+        preds = None
+        num_agent = obs_dict['agent_fut'].size()[0]
+        # for key, value in obs_dict.items():
+        #     print(key)
+        #     print(type(value))
+        # import pdb; pdb.set_trace()
+        for i in range(num_agent):
+            cur_obs_dict = {}
+            for key in obs_dict.keys():
+                if key == 'extras':
+                    cur_obs_dict[key] = {}
+                else:
+                    cur_obs_dict[key] = obs_dict[key][i].unsqueeze(0)
+
+            cur_preds = self(cur_obs_dict,
+                        num_samp=num_action_samples,
+                        class_free_guide_w=class_free_guide_w,
+                        guide_as_filter_only=guide_as_filter_only,
+                        guide_clean=guide_clean) # [1, N, T, 2]
+            
+            if not preds:
+                preds = cur_preds
+            else:
+                for key in preds.keys():
+                    if key == 'guide_losses':
+                        for key2 in preds['guide_losses'].keys():
+                            preds[key][key2] = torch.cat((preds[key][key2], cur_preds[key][key2]), dim=0)
+                    else:
+                        preds[key] = torch.cat((preds[key], cur_preds[key]), dim=0)
+        
         B, N, T, _ = preds["positions"].size()
 
         # arbitrarily use the first sample as the action by default
         act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device) 
-        if guide_with_gt and "target_positions" in obs_dict:
-            act_idx = choose_action_from_gt(preds, obs_dict)
-        elif cur_policy.current_guidance is not None:
-            guide_losses = preds.pop("guide_losses", None)
-            #import pdb; pdb.set_trace()              
-            act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
-                                                  guide_losses, LNS)
+        # if guide_with_gt and "target_positions" in obs_dict:
+        #     act_idx = choose_action_from_gt(preds, obs_dict)
+        # elif cur_policy.current_guidance is not None:
+        #     guide_losses = preds.pop("guide_losses", None)
+        #     #import pdb; pdb.set_trace()              
+        #     act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
+        #                                           guide_losses, LNS)
 
+        
         action_preds = TensorUtils.map_tensor(preds, lambda x: x[torch.arange(B), act_idx])
 
         info = dict(
