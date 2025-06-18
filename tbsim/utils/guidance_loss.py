@@ -163,6 +163,23 @@ class LNS_reselect():
         import pdb; pdb.set_trace()
         return list(groups_dict.values())
 
+def choose_action_from_agent_level_guidance(preds, obs_dict, guide_configs):
+    B, N, T, _ = preds["positions"].size()
+    # arbitrarily use the first sample as the action if no guidance given
+    act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device)
+    # choose sample closest t o desired guidance
+    accum_guide_loss = torch.stack([v for k,v in preds['guide_losses'].items()], dim=2)
+    # scount = 0
+    for sidx in range(len(guide_configs)):
+        scene_guide_loss = accum_guide_loss[..., 0:1]
+        scene_guide_loss = torch.nan_to_num(scene_guide_loss, nan=0.0)
+        scene_mask = ~torch.isnan(torch.sum(scene_guide_loss, dim=[1,2]))
+        scene_guide_loss = scene_guide_loss[scene_mask].cpu()
+        scene_guide_loss = torch.nansum(scene_guide_loss, dim=-1)
+        scene_act_idx = torch.argmin(scene_guide_loss, dim=-1)
+    act_idx = scene_act_idx.to(act_idx.device)
+    return act_idx
+
 
 def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LNS):
     B, N, T, _ = preds["positions"].size()

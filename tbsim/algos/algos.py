@@ -14,7 +14,7 @@ from tbsim.policies.common import Action
 from tbsim.models.trace import DiffuserModel
 from tbsim.models.trace_helpers import EMA
 
-from tbsim.utils.guidance_loss import choose_action_from_guidance, choose_action_from_gt
+from tbsim.utils.guidance_loss import choose_action_from_guidance, choose_action_from_gt, choose_action_from_agent_level_guidance
 
 class DiffuserTrafficModel(pl.LightningModule):
     def __init__(self, algo_config, modality_shapes, guidance_config=None):
@@ -313,7 +313,10 @@ class DiffuserTrafficModel(pl.LightningModule):
         B, N, T, _ = preds["positions"].size()
 
         # arbitrarily use the first sample as the action by default
-        act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device) 
+        act_idx = torch.zeros((B), dtype=torch.long, device=preds["positions"].device)
+        if cur_policy.current_guidance is not None:
+            # guide_losses = preds.pop("guide_losses", None)
+            act_idx = choose_action_from_agent_level_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs) 
         # if guide_with_gt and "target_positions" in obs_dict:
         #     act_idx = choose_action_from_gt(preds, obs_dict)
         # elif cur_policy.current_guidance is not None:
