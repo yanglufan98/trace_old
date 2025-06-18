@@ -656,9 +656,7 @@ class DiffuserModel(nn.Module):
         #       i.e. use the mean of the distribution predicted at the final step rather than sampling.
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
 
-        noise = torch.randn_like(model_mean) # 1,20,52,3/6
-        print(noise)
-        import pdb; pdb.set_trace()
+        noise = torch.randn_like(model_mean)
         sigma = (0.5 * model_log_variance).exp()
 
         # compute guidance
