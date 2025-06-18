@@ -108,12 +108,13 @@ class DiffuserTrafficModel(pl.LightningModule):
         else:
             return {"valLoss": "val/losses_diffusion_loss"}
 
-    def forward(self, obs_dict, num_samp=1, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False, LNS=None):
+    def forward(self, obs_dict, num_samp=1, agt_index=None, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False, LNS=None):
         cur_policy = self.nets["policy"]
         # this function is only called at validation time, so use ema
         if self.use_ema:
             cur_policy = self.ema_policy
         return cur_policy(obs_dict, num_samp,
+                                    agt_index=agt_index,
                                    return_diffusion=True,
                                    return_guidance_losses=True,
                                    class_free_guide_w=class_free_guide_w,
@@ -294,6 +295,7 @@ class DiffuserTrafficModel(pl.LightningModule):
 
             cur_preds = self(cur_obs_dict,
                         num_samp=num_action_samples,
+                        agt_index=i,
                         class_free_guide_w=class_free_guide_w,
                         guide_as_filter_only=guide_as_filter_only,
                         guide_clean=guide_clean) # [1, N, T, 2]

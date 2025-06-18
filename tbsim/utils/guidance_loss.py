@@ -551,7 +551,7 @@ class MapCollisionLoss(GuidanceLoss):
 
         return agt_coords_agent_frame, agt_coords_raster_frame
 
-    def forward(self, x, data_batch, agt_mask=None):   
+    def forward(self, x, data_batch, agt_mask=None, agt_index=None):   
         drivable_map = data_batch["drivable_map"]
         data_extent = data_batch["extent"]
         data_raster_from_agent = data_batch["raster_from_agent"]
@@ -692,23 +692,24 @@ class TargetPosLoss(GuidanceLoss):
         else:
             self.target_pos = torch.tensor(target_pos)
 
-    def forward(self, x, data_batch, agt_mask=None):
+    def forward(self, x, data_batch, agt_mask=None, agt_index=None):
         '''
         - x : the current trajectory (B, N, T, 6) where N is the number of samples and 6 is (x, y, vel, yaw, acc, yawvel)
         '''
         if agt_mask is not None:
             x = x[agt_mask]
-        assert x.size(0) == self.target_pos.size(0)
+        # assert x.size(0) == self.target_pos.size(0)
         
         min_t = int(self.min_target_time*x.size(2))
         x_pos = x[:,:,min_t:,:2]
         tgt_pos = self.target_pos.to(x_pos.device)[:,None,None] # (B,1,1,2)
+        if agt_index is not None:
+            tgt_pos = tgt_pos[agt_index]
         dist = torch.norm(x_pos - tgt_pos, dim=-1)
         # give higher loss weight to the closest valid timesteps
         loss_weighting = F.softmin(dist, dim=-1)
         loss = loss_weighting * torch.sum((x_pos - tgt_pos)**2, dim=-1) # (B, N, T)
         loss = torch.mean(loss, dim=-1) # (B, N)
-
         return loss
 
 class MAPFCollisionLoss(GuidanceLoss):
@@ -1179,7 +1180,7 @@ class DiffuserGuidance(object):
                         guide_cfg.func.init_for_batch(example_batch)
 
 
-    def compute_guidance_loss(self, x_loss, data_batch):
+    def compute_guidance_loss(self, x_loss, data_batch, agt_index=None):
         '''
         Evaluates all guidance losses and total and individual values.
         - x_loss: (B, N, T, 6) the trajectory to use to compute losses and 6 is (x, y, vel, yaw, acc, yawvel)
@@ -1198,14 +1199,16 @@ class DiffuserGuidance(object):
                 for gidx, guide_cfg in enumerate(cur_guide):
                     agt_mask = local_scene_index == si
                     if guide_cfg.agents is not None:
+                        if guide_cfg.name != 'target_pos':
                         # mask out non-requested agents within the scene
-                        cur_scene_inds = torch.nonzero(agt_mask, as_tuple=True)[0]
-                        agt_mask_inds = cur_scene_inds[guide_cfg.agents]
-                        agt_mask = torch.zeros_like(agt_mask)
-                        agt_mask[agt_mask_inds] = True
+                            cur_scene_inds = torch.nonzero(agt_mask, as_tuple=True)[0]
+                            agt_mask_inds = cur_scene_inds[guide_cfg.agents]
+                            agt_mask = torch.zeros_like(agt_mask)
+                            agt_mask[agt_mask_inds] = True
                     # compute loss
                     cur_loss = guide_cfg.func(x_loss, data_batch,
-                                            agt_mask=agt_mask)
+                                            agt_mask=agt_mask,
+                                            agt_index=agt_index)
                     indiv_loss = torch.ones((bsize, num_samp)).to(cur_loss.device) * np.nan # return indiv loss for whole batch, not just masked ones
                     indiv_loss[agt_mask] = cur_loss.detach().clone()
                     guide_losses[guide_cfg.name + '_scene_%03d_%02d' % (si, gidx)] = indiv_loss

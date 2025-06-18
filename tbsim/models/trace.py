@@ -447,7 +447,8 @@ class DiffuserModel(nn.Module):
         return target_traj
 
     
-    def forward(self, data_batch: Dict[str, torch.Tensor], num_samp=1,
+    def forward(self, data_batch: Dict[str, torch.Tensor], num_samp=1, 
+                    agt_index=None,
                     return_diffusion=False,
                     return_guidance_losses=False,
                     class_free_guide_w=0.0,
@@ -459,6 +460,7 @@ class DiffuserModel(nn.Module):
         cond_samp_out = self.conditional_sample(data_batch, 
                                                 horizon=None,
                                                 aux_info=aux_info,
+                                                agt_index=agt_index,
                                                 return_diffusion=return_diffusion,
                                                 return_guidance_losses=return_guidance_losses,
                                                 num_samp=num_samp,
@@ -602,7 +604,8 @@ class DiffuserModel(nn.Module):
         return model_mean, posterior_variance, posterior_log_variance, (x_recon, x_tmp, t)
 
     def guidance(self, x, data_batch, aux_info, num_samp=1,
-                    return_grad_of=None):
+                    return_grad_of=None,
+                    agt_index=None):
         '''
         estimate the gradient of rule reward w.r.t. the input trajectory
         Input:
@@ -611,6 +614,7 @@ class DiffuserModel(nn.Module):
             aux_info: additional info.
             return_grad_of: which variable to take gradient of guidance loss wrt, if not given,
                             takes wrt the input x.
+            agt_index: which # of agent is being guided
         '''
         assert self.current_guidance is not None, 'Must instantiate guidance object before calling'
         bsize = int(x.size(0) / num_samp)
@@ -625,7 +629,7 @@ class DiffuserModel(nn.Module):
 
             # compute losses and gradient
             x_loss = x_all.reshape((bsize, num_samp, num_t, 6))
-            tot_loss, per_losses = self.current_guidance.compute_guidance_loss(x_loss, data_batch)
+            tot_loss, per_losses = self.current_guidance.compute_guidance_loss(x_loss, data_batch, agt_index=agt_index)
             # print(tot_loss)
             tot_loss.backward()
             guide_grad = x.grad if return_grad_of is None else return_grad_of.grad
@@ -633,7 +637,7 @@ class DiffuserModel(nn.Module):
             return guide_grad, per_losses
 
     @torch.no_grad()
-    def p_sample(self, x, t, data_batch, aux_info={}, num_samp=1, class_free_guide_w=0.0, 
+    def p_sample(self, x, t, data_batch, aux_info={}, agt_index=None, num_samp=1, class_free_guide_w=0.0, 
                  apply_guidance=True, guide_clean=False, eval_final_guide_loss=False):
         b, *_, device = *x.shape, x.device
         with_func = torch.no_grad
@@ -669,7 +673,9 @@ class DiffuserModel(nn.Module):
                 return_grad_of = x_guidance
                 x_guidance.requires_grad_()
 
-            guide_grad, guide_losses = self.guidance(x_guidance, data_batch, aux_info, num_samp=num_samp, return_grad_of=return_grad_of)
+            guide_grad, guide_losses = self.guidance(x_guidance, data_batch, aux_info, num_samp=num_samp,
+                                                     return_grad_of=return_grad_of,
+                                                     agt_index=agt_index)
 
             if guide_clean and self.diffuser_input_mode == 'state_and_action':
                 # only need the grad w.r.t noisy action
@@ -697,7 +703,8 @@ class DiffuserModel(nn.Module):
         if self.current_guidance is not None and eval_final_guide_loss:
             # eval guidance loss one last time for filtering if desired
             #       (even if not applied during sampling)
-            _, guide_losses = self.guidance(x_out.clone().detach().requires_grad_(), data_batch, aux_info, num_samp=num_samp)
+            _, guide_losses = self.guidance(x_out.clone().detach().requires_grad_(), data_batch, aux_info, num_samp=num_samp,
+                                            agt_index=agt_index)
         
         # convert action to state+action
         if self.diffuser_input_mode == 'state_and_action':
@@ -709,6 +716,7 @@ class DiffuserModel(nn.Module):
     @torch.no_grad()
     def p_sample_loop(self, shape, data_batch, num_samp,
                     aux_info={},
+                    agt_index=None,
                     return_diffusion=False,
                     return_guidance_losses=False,
                     class_free_guide_w=0.0,
@@ -739,6 +747,7 @@ class DiffuserModel(nn.Module):
             
             x, guide_losses = self.p_sample(x, timesteps, data_batch,
                                             aux_info=aux_info,
+                                            agt_index=agt_index,
                                             num_samp=num_samp,
                                             class_free_guide_w=class_free_guide_w,
                                             apply_guidance=apply_guidance,
@@ -766,12 +775,12 @@ class DiffuserModel(nn.Module):
         return out_dict
 
     @torch.no_grad()
-    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, **kwargs):
+    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, agt_index=None, **kwargs):
         batch_size = data_batch['history_positions'].size()[0]
         horizon = horizon or self.horizon
         shape = (batch_size, num_samp, horizon, self.transition_dim)
 
-        return self.p_sample_loop(shape, data_batch, num_samp, class_free_guide_w=class_free_guide_w, **kwargs)
+        return self.p_sample_loop(shape, data_batch, num_samp, agt_index=agt_index, class_free_guide_w=class_free_guide_w, **kwargs)
 
     #------------------------------------------ training ------------------------------------------#
 
