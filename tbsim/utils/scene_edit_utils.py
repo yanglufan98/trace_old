@@ -53,10 +53,20 @@ def guided_rollout(
             device = policy.device if device is None else device
             ex_obs = TensorUtils.to_torch(ex_obs, device=device, ignore_if_unspecified=True)
         if not use_gt:
+            target_pos = [[]]
+            for i, scene_guidance_config in enumerate(guidance_config):
+                for configs in scene_guidance_config:
+                    if configs['name'] == 'target_pos':
+                        # configs['params']['target_pos']: list, len=num_agent
+                        target_pos[i] = np.array(configs['params']['target_pos'], dtype=np.float32)
+                        scene_guidance_config.remove(configs)
             policy_model.set_guidance(guidance_config, ex_obs['agents'])
         guidance_metrics = guidance_metrics_from_config(guidance_config)
         env._metrics.update(guidance_metrics)  
         added_metrics += guidance_metrics.keys()
+    
+    if obs_to_torch:
+        target_pos = TensorUtils.to_torch(target_pos, device=policy.device, ignore_if_unspecified=True)
 
     # metrics are reset here too, so have to run again after adding new metrics
     env.reset(scene_indices=scene_indices, start_frame_index=start_frames)
@@ -70,7 +80,7 @@ def guided_rollout(
             obs_torch = TensorUtils.to_torch(obs, device=device, ignore_if_unspecified=True)
         else:
             obs_torch = obs
-        action = policy.get_action(obs_torch, step_index=counter, LNS=LNS)
+        action = policy.get_action(obs_torch, step_index=counter, target_pos=target_pos, LNS=LNS)
 
         env.step(action, num_steps_to_take=n_step_action, render=False) 
         counter += n_step_action

@@ -449,6 +449,7 @@ class DiffuserModel(nn.Module):
     
     def forward(self, data_batch: Dict[str, torch.Tensor], num_samp=1, 
                     agt_index=None,
+                    hard_cond=None,
                     return_diffusion=False,
                     return_guidance_losses=False,
                     class_free_guide_w=0.0,
@@ -460,6 +461,7 @@ class DiffuserModel(nn.Module):
         cond_samp_out = self.conditional_sample(data_batch, 
                                                 horizon=None,
                                                 aux_info=aux_info,
+                                                hard_cond=hard_cond,
                                                 agt_index=agt_index,
                                                 return_diffusion=return_diffusion,
                                                 return_guidance_losses=return_guidance_losses,
@@ -717,6 +719,7 @@ class DiffuserModel(nn.Module):
     def p_sample_loop(self, shape, data_batch, num_samp,
                     aux_info={},
                     agt_index=None,
+                    hard_cond=None,
                     return_diffusion=False,
                     return_guidance_losses=False,
                     class_free_guide_w=0.0,
@@ -775,12 +778,12 @@ class DiffuserModel(nn.Module):
         return out_dict
 
     @torch.no_grad()
-    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, agt_index=None, **kwargs):
+    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, agt_index=None, hard_cond=None, **kwargs):
         batch_size = data_batch['history_positions'].size()[0]
         horizon = horizon or self.horizon
         shape = (batch_size, num_samp, horizon, self.transition_dim)
 
-        return self.p_sample_loop(shape, data_batch, num_samp, agt_index=agt_index, class_free_guide_w=class_free_guide_w, **kwargs)
+        return self.p_sample_loop(shape, data_batch, num_samp, agt_index=agt_index, class_free_guide_w=class_free_guide_w, hard_cond=hard_cond, **kwargs)
 
     #------------------------------------------ training ------------------------------------------#
 
