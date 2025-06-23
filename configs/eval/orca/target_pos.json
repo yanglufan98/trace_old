@@ -1,5 +1,5 @@
 {
-    "name": "orca_map_open_loop_target_pos",
+    "name": "target_pos",
     "env": "trajdata",
     "dataset_path": null,
     "eval_class": "Diffuser",
@@ -13,7 +13,7 @@
     "agent_eval_class": null,
     "ckpt_root_dir": "checkpoints/",
     "experience_hdf5_path": null,
-    "results_dir": "orca_map_open_loop_target_pos/",
+    "results_dir": "target_pos/",
     "ckpt": {
         "policy": {
             "ngc_job_id": null,

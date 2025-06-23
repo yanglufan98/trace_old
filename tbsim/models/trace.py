@@ -740,6 +740,8 @@ class DiffuserModel(nn.Module):
         # convert action to state+action
         if self.diffuser_input_mode == 'state_and_action':
             x = self.convert_action_to_state_and_action(x[..., [4, 5]], aux_info)
+        # apply hard conditioning
+        x[...,-1,:2] = hard_cond
 
         if return_diffusion: diffusion = [x]
 
@@ -756,7 +758,7 @@ class DiffuserModel(nn.Module):
                                             apply_guidance=apply_guidance,
                                             guide_clean=guide_clean,
                                             eval_final_guide_loss=(i == steps[-1]))
-            
+            x[...,-1, :2] = hard_cond
 
             if return_diffusion: diffusion.append(x)
 
