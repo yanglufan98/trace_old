@@ -227,6 +227,24 @@ class DiffuserModel(nn.Module):
 
     def clear_guidance(self):
         self.current_guidance = None
+    
+    def add_extra_costs(self, path_l):
+        """
+        Instantiates test-time guidance functions with planed trajectories(path_l)
+        """
+        if len(path_l) > 0:
+            print(f"create constraints for planed {len(path_l)} agent trajectories")
+            # TODO: init config list for PriorityInformedAgentCollision
+            config_list = [[{
+                'name': 'priority_agent_collision',
+                'params': {
+                    'path_l': path_l
+                },
+                'weight': 1000,
+                'agents': None
+            }]]
+            self.current_guidance.add_extra_costs(config_list)
+
 
     #------------------------------------------ utility ------------------------------------------#
     def _create_dynamics(self):
@@ -458,10 +476,12 @@ class DiffuserModel(nn.Module):
         use_class_free_guide = class_free_guide_w != 0.0
         aux_info = self.get_aux_info(data_batch, use_class_free_guide)
         
+        if len(path_l) > 0:
+            self.add_extra_costs(path_l)
+        
         cond_samp_out = self.conditional_sample(data_batch, 
                                                 horizon=None,
                                                 aux_info=aux_info,
-                                                path_l=path_l,
                                                 agt_index=agt_index,
                                                 return_diffusion=return_diffusion,
                                                 return_guidance_losses=return_guidance_losses,
@@ -469,6 +489,8 @@ class DiffuserModel(nn.Module):
                                                 class_free_guide_w=class_free_guide_w,
                                                 apply_guidance=apply_guidance,
                                                 guide_clean=guide_clean)
+        self.current_guidance.remove_extra_guidance()
+
         traj_init = cond_samp_out['pred_traj']
         diff_init = guide_losses = None
         if return_diffusion:
@@ -719,7 +741,6 @@ class DiffuserModel(nn.Module):
     def p_sample_loop(self, shape, data_batch, num_samp,
                     aux_info={},
                     agt_index=None,
-                    path_l=None,
                     return_diffusion=False,
                     return_guidance_losses=False,
                     class_free_guide_w=0.0,
@@ -778,12 +799,12 @@ class DiffuserModel(nn.Module):
         return out_dict
 
     @torch.no_grad()
-    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, agt_index=None, path_l=None, **kwargs):
+    def conditional_sample(self, data_batch, horizon=None, num_samp=1, class_free_guide_w=0.0, agt_index=None, **kwargs):
         batch_size = data_batch['history_positions'].size()[0]
         horizon = horizon or self.horizon
         shape = (batch_size, num_samp, horizon, self.transition_dim)
 
-        return self.p_sample_loop(shape, data_batch, num_samp, agt_index=agt_index, class_free_guide_w=class_free_guide_w, path_l=path_l, **kwargs)
+        return self.p_sample_loop(shape, data_batch, num_samp, agt_index=agt_index, class_free_guide_w=class_free_guide_w, **kwargs)
 
     #------------------------------------------ training ------------------------------------------#
 

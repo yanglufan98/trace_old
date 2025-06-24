@@ -525,6 +525,20 @@ class AgentCollisionLoss(GuidanceLoss):
             return cur_penalties[agt_mask]
         else:
             return cur_penalties
+    
+class PriorityInformedAgentCollisionLoss(GuidanceLoss):
+    def __init__(self, path_l, buffer_dist=0.2):
+        super().__init__()
+        self.buffer_dist = buffer_dist
+        self.penalty_dists = None
+        self.path_l = path_l
+    
+    def init_for_batch(self, example_batch):
+        raise NotImplementedError("init for batch for PriorityInformedAgentCollisionLoss is not implemented yet.")
+    
+    def forward(self, x, data_batch, agt_mask=None):
+        loss = torch.rand(x.shape, device=x.device, dtype=torch.float32)
+        return loss
 
 
 class MapCollisionLoss(GuidanceLoss):
@@ -1171,7 +1185,8 @@ GUIDANCE_FUNC_MAP = {
     'social_group' : SocialGroupLoss,
     'min_speed' : MinSpeedLoss,
     'amp_value' : AmpValueLoss,
-    'mapf_collision': MAPFCollisionLoss
+    'mapf_collision': MAPFCollisionLoss,
+    'priority_agent_collision': PriorityInformedAgentCollisionLoss,
 }
 
 class DiffuserGuidance(object):
@@ -1195,7 +1210,20 @@ class DiffuserGuidance(object):
                     guide_cfg.func = GUIDANCE_FUNC_MAP[guide_cfg.name](**guide_cfg.params)
                     if example_batch is not None:
                         guide_cfg.func.init_for_batch(example_batch)
-
+        self.extra_guide_configs = [[]]*self.num_scenes
+    
+    def add_extra_costs(self, guidance_config_list, example_batch=None):
+        for si in range(self.num_scenes):
+            if len(guidance_config_list[si]) > 0:
+                self.extra_guide_configs[si] = [GuidanceConfig.from_dict(cur_cfg) for cur_cfg in guidance_config_list[si]]
+                # initialize each guidance function
+                for guide_cfg in self.extra_guide_configs[si]:
+                    guide_cfg.func = GUIDANCE_FUNC_MAP[guide_cfg.name](**guide_cfg.params)
+                    if example_batch is not None:
+                        guide_cfg.func.init_for_batch(example_batch)
+    
+    def remove_extra_guidance(self):
+        self.extra_guide_configs = [[]]*self.num_scenes
 
     def compute_guidance_loss(self, x_loss, data_batch, agt_index=None):
         '''
