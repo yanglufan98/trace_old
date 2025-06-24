@@ -108,14 +108,14 @@ class DiffuserTrafficModel(pl.LightningModule):
         else:
             return {"valLoss": "val/losses_diffusion_loss"}
 
-    def forward(self, obs_dict, num_samp=1, agt_index=None, hard_cond=None, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False, LNS=None):
+    def forward(self, obs_dict, num_samp=1, agt_index=None, path_l=None, class_free_guide_w=0.0, guide_as_filter_only=False, guide_clean=False, LNS=None):
         cur_policy = self.nets["policy"]
         # this function is only called at validation time, so use ema
         if self.use_ema:
             cur_policy = self.ema_policy
         return cur_policy(obs_dict, num_samp,
                                     agt_index=agt_index,
-                                    hard_cond=hard_cond,
+                                    path_l=path_l,
                                    return_diffusion=True,
                                    return_guidance_losses=True,
                                    class_free_guide_w=class_free_guide_w,
@@ -283,10 +283,7 @@ class DiffuserTrafficModel(pl.LightningModule):
 
         preds = None
         num_agent = obs_dict['agent_fut'].size()[0]
-        # for key, value in obs_dict.items():
-        #     print(key)
-        #     print(type(value))
-        # import pdb; pdb.set_trace()
+        path_l = []
         for i in range(num_agent):
             cur_obs_dict = {}
             for key in obs_dict.keys():
@@ -294,15 +291,15 @@ class DiffuserTrafficModel(pl.LightningModule):
                     cur_obs_dict[key] = {}
                 else:
                     cur_obs_dict[key] = obs_dict[key][i].unsqueeze(0)
-            hard_cond = target_pos[0][i] # tensor (2,)
 
             cur_preds = self(cur_obs_dict,
                         num_samp=num_action_samples,
                         agt_index=i,
-                        hard_cond=hard_cond,
+                        path_l=path_l,
                         class_free_guide_w=class_free_guide_w,
                         guide_as_filter_only=guide_as_filter_only,
                         guide_clean=guide_clean) # [1, N, T, 2]
+            path_l.append(cur_preds['positions'])
             
             if not preds:
                 preds = cur_preds
@@ -313,7 +310,8 @@ class DiffuserTrafficModel(pl.LightningModule):
                             preds[key][key2] = torch.cat((preds[key][key2], cur_preds[key][key2]), dim=0)
                     else:
                         preds[key] = torch.cat((preds[key], cur_preds[key]), dim=0)
-        
+            
+
         B, N, T, _ = preds["positions"].size()
 
         # arbitrarily use the first sample as the action by default
