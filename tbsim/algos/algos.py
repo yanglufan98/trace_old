@@ -292,7 +292,7 @@ class DiffuserTrafficModel(pl.LightningModule):
             act_idx = choose_action_from_gt(preds, obs_dict)
         elif cur_policy.current_guidance is not None:
             guide_losses = preds.pop("guide_losses", None)
-            #import pdb; pdb.set_trace()              
+            import pdb; pdb.set_trace()              
             act_idx = choose_action_from_guidance(preds, obs_dict, cur_policy.current_guidance.guide_configs, 
                                                   guide_losses, LNS)
 

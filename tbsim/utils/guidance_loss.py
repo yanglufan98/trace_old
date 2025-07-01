@@ -33,79 +33,58 @@ class UnionFind:
             self.parent[py] = px
 
 class LNS_reselect():
-    def __init__(self, num_agent, guide_cfg=None, **kwargs):
-        self.num_agent = num_agent
-        self.num_disk = kwargs.get('num_disk', None)
-        self.buffer_dist = kwargs.get('buffer_dist', None)
-        self.guide_cfg = guide_cfg
-        self.data_extent = kwargs.get('data_extent', None)
-        self.data_world_from_agent = kwargs.get('world_from_agent', None)
-        self.agt_rad = kwargs.get('agt_rad', None)
-        self.device = kwargs.get('device', 'cpu')
-        # TODO: got to find a better way to incoporate agt_rad
-        self.penalty_dists = (self.agt_rad * torch.ones((num_agent, 1), device=self.device)).expand(num_agent, num_agent) + \
-            (self.agt_rad * torch.ones((1, num_agent), device=self.device)).expand(num_agent, num_agent) + self.buffer_dist
+    def __init__(self, cur_loss, obs_dict):
+        self.best_loss = cur_loss
+        self.num_agent = obs_dict['image'].shape[0]
+        # self.num_disk = kwargs.get('num_disk', None)
+        # self.buffer_dist = kwargs.get('buffer_dist', None)
+        # self.guide_cfg = guide_cfg
+        # self.data_extent = kwargs.get('data_extent', None)
+        # self.data_world_from_agent = kwargs.get('world_from_agent', None)
+        # self.agt_rad = kwargs.get('agt_rad', None)
+        # self.device = kwargs.get('device', 'cpu')
+        # # TODO: got to find a better way to incoporate agt_rad
+        # self.penalty_dists = (self.agt_rad * torch.ones((num_agent, 1), device=self.device)).expand(num_agent, num_agent) + \
+        #     (self.agt_rad * torch.ones((1, num_agent), device=self.device)).expand(num_agent, num_agent) + self.buffer_dist
     
-    def reselect(self, act_idx, preds):
+    def reselect(self, preds, guided_losses, guide_config):
         """
         choose the best combination out of all possible ones
         cur_combination: act_idex, preds, cur_loss
         """
-        # NOTE: only agent_collision is implemented
-        # should consider more criteria, eg.map_collision, social group
-        position = preds['positions']
-        yaw = preds['yaws']
-        B, N, T, _ = position.shape
-        batch_indices = torch.arange(B, device=self.device)
-        cur_position = position[batch_indices, act_idx]
-        cur_yaw = yaw[batch_indices, act_idx] 
-        cur_loss = self.evaluate_collision(cur_position, cur_yaw)
-        if cur_loss.max() <= 1e-5:
-            # no collision in this scene
-            return act_idx
-        import pdb; pdb.set_trace()
-        # Find groups of agents that are colliding
-        collision_groups = self.find_collision_agent(cur_loss)
+        # NOTE: among all the scene-level guidance only agent_collision is implemented, should also consider social group
+        num_agent, batch_size, horizon, _ = preds["positions"].shape
+        if num_agent != self.num_agent:
+            raise ValueError("num_agent should batch")
+        self.guided_losses = guided_losses
+        
+        # generate all possible combination
+        all_indices = [list(range(batch_size)) for _ in range(num_agent)]
+        all_combinations = list(itertools.product(*all_indices))
+        for comb in all_combinations:
+            positions = [preds['positions'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)]
+            yaws = [preds['yaws'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)]
+            cur_loss = self.get_cur_loss(positions, yaws, comb, guided_losses, guide_config)
+            if cur_loss < self.best_loss:
+                self.best_loss = cur_loss
+                best_comb = comb
+        
+        best_comb_torch = torch.tensor(best_comb, device=preds['positions'].device)
+        return best_comb_torch
+    
+    def get_cur_loss(positions, yaws, comb, guided_losses, guide_config):
+        # TODO: if comb = scene-level filter comb, no calculation needed
+        loss = 0.0
+        for key in guided_losses:
+            # if agent level, add
+            if ['map_collision', 'target_pos'].any() in key:
+                cur_loss = guided_losses[key][idx]
+            else:
+                # calculate individual loss
+                cur_loss = ...
+            loss += cur_loss
+        return loss
 
-        # TODO: Find all the possible routes for each agent. eg. should at least reach the target/avoid map_collision
-        # the agent_collision
-
-        print("DEBUG: cur_loss and collision_groups initialized")
-        import pdb; pdb.set_trace()
-        best_loss = cur_loss
-        for _, colliding_agents in collision_groups.items():
-            best_indices = None
-            # Try all possible trajectory combinations for colliding agents
-            for traj_indices in itertools.product(range(N), repeat=len(colliding_agents)):
-                print("DEBUG: check itertools.product")
-                import pdb; pdb.set_trace()
-                # Create temporary trajectory selection
-                temp_act_idx = act_idx.clone()
-                for agent_idx, traj_idx in zip(colliding_agents, traj_indices):
-                    temp_act_idx[agent_idx] = traj_idx
-                
-                # Evaluate collision loss for this combination
-                print("DEBUG: check how to use temp_act_idx as index")
-                import pdb; pdb.set_trace()
-                temp_collision_loss = self.evaluate_collision(position[temp_act_idx], yaw[temp_act_idx] )
-                # Calculate loss for both colliding agents and all other agents
-                cur_loss = temp_collision_loss[colliding_agents].sum() + temp_collision_loss[~torch.isin(torch.arange(B), torch.tensor(colliding_agents))].sum()
-                
-                # Update if better combination found
-                if cur_loss < best_loss:
-                    print("got a better plan")
-                    import pdb; pdb.set_trace()
-                    best_loss = cur_loss
-                    best_indices = temp_act_idx[colliding_agents].clone()
-            
-            # Apply best trajectory combination found
-            if best_indices is not None:
-                import pdb; pdb.set_trace()
-                for agent_idx, best_idx in zip(colliding_agents, best_indices):
-                    act_idx[agent_idx] = best_idx
-        print("DEBUG: before return")
-        import pdb; pdb.set_trace()
-        return act_idx
 
     def evaluate_collision(self, position, yaw):
         """
@@ -190,16 +169,12 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
             if not LNS:
                 print('LNS not used')
             elif LNS == 'reselect':
+                cur_loss = torch.min(torch.sum(scene_guide_loss, dim=0))
                 buffer_dist = 0.2
                 agt_rad = torch.tensor(0.4, device=preds["positions"].device)
-                LNS = LNS_reselect(num_agent=obs_dict['extent'].shape[0],
-                                   guide_cfg=scene_guide_cfg,
-                                   buffer_dist=buffer_dist,
-                                   data_extent=obs_dict['extent'],
-                                   world_from_agent=obs_dict['world_from_agent'],
-                                   agt_rad=agt_rad,
-                                   device=preds['positions'].device)
-                scene_act_idx = LNS.reselect()
+                import pdb; pdb.set_trace()
+                LNS = LNS_reselect(cur_loss)
+                scene_act_idx = LNS.reselect(preds)
             else:
                 raise NotImplementedError('only reselect is implemented')
         else:
