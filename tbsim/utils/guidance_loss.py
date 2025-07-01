@@ -187,27 +187,25 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
         if np.sum(is_scene_level) > 0: 
             # choose which sample minimizes at the scene level (where each sample is a "scene")
             scene_act_idx = torch.argmin(torch.sum(scene_guide_loss, dim=0))
+            if not LNS:
+                print('LNS not used')
+            elif LNS == 'reselect':
+                buffer_dist = 0.2
+                agt_rad = torch.tensor(0.4, device=preds["positions"].device)
+                LNS = LNS_reselect(num_agent=obs_dict['extent'].shape[0],
+                                   guide_cfg=scene_guide_cfg,
+                                   buffer_dist=buffer_dist,
+                                   data_extent=obs_dict['extent'],
+                                   world_from_agent=obs_dict['world_from_agent'],
+                                   agt_rad=agt_rad,
+                                   device=preds['positions'].device)
+                scene_act_idx = LNS.reselect()
+            else:
+                raise NotImplementedError('only reselect is implemented')
         else:
             # each agent can choose the sample that minimizes guidance loss independently
+            # NOTE: only agent level guidances are used 
             scene_act_idx = torch.argmin(scene_guide_loss, dim=-1)
-        # import pdb; pdb.set_trace()
-        if not LNS:
-            print('DEBUG: LNS not used')
-            #import pdb; pdb.set_trace()
-        elif LNS == 'reselect':
-            buffer_dist = 0.2
-            agt_rad=torch.tensor(0.4, device=preds["positions"].device)
-            #TODO: check if num_agent == len(scene_mask)
-            LNS = LNS_reselect(num_agent=scene_guide_loss.shape[0], guide_cfg=scene_guide_cfg, 
-                               buffer_dist=buffer_dist,
-                               data_extent=obs_dict['extent'],
-                               world_from_agent=obs_dict['world_from_agent'],
-                               agt_rad=agt_rad,
-                               device=preds["positions"].device)
-            # TODO: apply to multiple scene in a sim
-            scene_act_idx = LNS.reselect(scene_act_idx, preds)
-        else:
-            raise NotImplementedError('only reselect is implemented')
         
         scount = ends
         act_idx[scene_mask] = scene_act_idx.to(act_idx.device)
