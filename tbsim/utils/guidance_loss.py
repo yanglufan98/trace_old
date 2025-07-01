@@ -36,6 +36,8 @@ class LNS_reselect():
     def __init__(self, cur_loss, obs_dict):
         self.best_loss = cur_loss
         self.num_agent = obs_dict['image'].shape[0]
+        self.obs_dict = obs_dict
+        self.penalty_dists = None
         # self.num_disk = kwargs.get('num_disk', None)
         # self.buffer_dist = kwargs.get('buffer_dist', None)
         # self.guide_cfg = guide_cfg
@@ -47,7 +49,7 @@ class LNS_reselect():
         # self.penalty_dists = (self.agt_rad * torch.ones((num_agent, 1), device=self.device)).expand(num_agent, num_agent) + \
         #     (self.agt_rad * torch.ones((1, num_agent), device=self.device)).expand(num_agent, num_agent) + self.buffer_dist
     
-    def reselect(self, preds, guided_losses, guide_config):
+    def reselect(self, preds, guide_losses, guide_config):
         """
         choose the best combination out of all possible ones
         cur_combination: act_idex, preds, cur_loss
@@ -56,15 +58,20 @@ class LNS_reselect():
         num_agent, batch_size, horizon, _ = preds["positions"].shape
         if num_agent != self.num_agent:
             raise ValueError("num_agent should batch")
-        self.guided_losses = guided_losses
         
         # generate all possible combination
         all_indices = [list(range(batch_size)) for _ in range(num_agent)]
+        import pdb; pdb.set_trace()
         all_combinations = list(itertools.product(*all_indices))
+
         for comb in all_combinations:
-            positions = [preds['positions'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)]
-            yaws = [preds['yaws'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)]
-            cur_loss = self.get_cur_loss(positions, yaws, comb, guided_losses, guide_config)
+            if all(traj_idx == comb[0] for traj_idx in comb):
+                continue
+            positions = torch.stack([preds['positions'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)])
+            yaws = torch.stack([preds['yaws'][agent_idx, traj_idx] for agent_idx, traj_idx in enumerate(comb)])
+            # if the traj_idx for each agent in comb, is the same, continue
+            cur_loss = self.get_cur_loss(positions, yaws, comb, guide_losses, guide_config)
+            print(f"for comb:{comb}, loss is {cur_loss}")
             if cur_loss < self.best_loss:
                 self.best_loss = cur_loss
                 best_comb = comb
@@ -72,16 +79,55 @@ class LNS_reselect():
         best_comb_torch = torch.tensor(best_comb, device=preds['positions'].device)
         return best_comb_torch
     
-    def get_cur_loss(positions, yaws, comb, guided_losses, guide_config):
+    def get_cur_loss(self, positions, yaws, comb, guide_losses, guide_config):
         # TODO: if comb = scene-level filter comb, no calculation needed
         loss = 0.0
-        for key in guided_losses:
+        B, T, _ = positions.shape
+        data_world_from_agent = self.obs_dict['world_from_agent']
+        scene_mask = ~torch.eye(B, dtype=torch.bool).to(positions.device)
+        import pdb; pdb.set_trace()
+        for key in guide_losses:
             # if agent level, add
-            if ['map_collision', 'target_pos'].any() in key:
-                cur_loss = guided_losses[key][idx]
+            if any(substring in key for substring in ['map_collision', 'target_pos']):
+                # guided_losses[key] has shape (num_agent, batch_size)
+                # comb is a tuple/list of length num_agent, each entry is the batch index for that agent
+                cur_loss = sum(guide_losses[key][agent_idx, comb[agent_idx]] for agent_idx in range(len(comb)))
+                print(f"current combination, loss of {key}: {cur_loss}")
+            
+            elif 'agent_collision' in key:
+                if self.penalty_dists is None:
+                    # TODO: init penalty_dists
+                    agt_rad = self.obs_dict['extent'][:, 1]/2.
+                    buffer_dist = next(cfg.params['buffer_dist'] for cfg in guide_config if cfg.name == 'agent_collision')
+                    penalty_dists = agt_rad.view(B, 1).expand(B, B) + agt_rad.view(1, B).expand(B, B) + buffer_dist
+                else:
+                    penalty_dists = self.penalty_dists
+
+                positions = positions.unsqueeze(1)
+                yaws = yaws.unsqueeze(1)
+                pos_global, _ = transform_agents_to_world(positions, yaws, data_world_from_agent)
+                pos_global = pos_global.squeeze(1)
+
+                # First, permute to (horizon, num_agent, 2)
+                pos_global_t = pos_global.permute(1, 0, 2)  # (horizon, num_agent, 2)
+                # Compute pairwise distances for each timestep
+                diff = pos_global_t.unsqueeze(2) - pos_global_t.unsqueeze(1)  # (horizon, num_agent, num_agent, 2)
+                pair_dists = torch.norm(diff, dim=-1)  # (T, B, B)
+
+                cur_penalties = 1.0 - (pair_dists / penalty_dists)
+
+                penalty_dists = penalty_dists.view(1, B, B)
+                is_colliding_mask = torch.logical_and(pair_dists <= penalty_dists,
+                                                      scene_mask.view(1,B,B))
+
+                cur_penalties = torch.where(is_colliding_mask,
+                                            cur_penalties,
+                                            torch.zeros_like(cur_penalties))
+                cur_loss = cur_penalties.sum()
+            elif 'social_group' in key:
+                raise NotImplementedError('social group not implemented yet')
             else:
-                # calculate individual loss
-                cur_loss = ...
+                raise NotImplementedError('unkown key')
             loss += cur_loss
         return loss
 
@@ -172,9 +218,10 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
                 cur_loss = torch.min(torch.sum(scene_guide_loss, dim=0))
                 buffer_dist = 0.2
                 agt_rad = torch.tensor(0.4, device=preds["positions"].device)
+                LNS = LNS_reselect(cur_loss, obs_dict)
                 import pdb; pdb.set_trace()
-                LNS = LNS_reselect(cur_loss)
-                scene_act_idx = LNS.reselect(preds)
+                scene_act_idx = LNS.reselect(preds, guide_losses, scene_guide_cfg)
+                import pdb; pdb.set_trace()
             else:
                 raise NotImplementedError('only reselect is implemented')
         else:
