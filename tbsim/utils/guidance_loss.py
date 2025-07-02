@@ -61,7 +61,6 @@ class LNS_reselect():
         
         # generate all possible combination
         all_indices = [list(range(batch_size)) for _ in range(num_agent)]
-        import pdb; pdb.set_trace()
         all_combinations = list(itertools.product(*all_indices))
 
         for comb in all_combinations:
@@ -85,7 +84,6 @@ class LNS_reselect():
         B, T, _ = positions.shape
         data_world_from_agent = self.obs_dict['world_from_agent']
         scene_mask = ~torch.eye(B, dtype=torch.bool).to(positions.device)
-        import pdb; pdb.set_trace()
         for key in guide_losses:
             # if agent level, add
             if any(substring in key for substring in ['map_collision', 'target_pos']):
@@ -185,7 +183,7 @@ class LNS_reselect():
             root = uf.find(i)
             groups_dict[root].add(i)
         
-        import pdb; pdb.set_trace()
+
         return list(groups_dict.values())
 
 
@@ -219,9 +217,7 @@ def choose_action_from_guidance(preds, obs_dict, guide_configs, guide_losses, LN
                 buffer_dist = 0.2
                 agt_rad = torch.tensor(0.4, device=preds["positions"].device)
                 LNS = LNS_reselect(cur_loss, obs_dict)
-                import pdb; pdb.set_trace()
                 scene_act_idx = LNS.reselect(preds, guide_losses, scene_guide_cfg)
-                import pdb; pdb.set_trace()
             else:
                 raise NotImplementedError('only reselect is implemented')
         else:
